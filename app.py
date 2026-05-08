@@ -58,6 +58,11 @@ if archivo_nuevo and archivo_historial:
             if c not in df_hist.columns:
                 df_hist[c] = 0.0 if 'Probabilidad' in c else ""
 
+        # --- CAMBIO QUIRÚRGICO: ESTANDARIZAR TIPO DE DATO PARA EL CRUCE ---
+        # Evita el ValueError de pandas al mezclar texto con números
+        df_nuevo[col_llave] = df_nuevo[col_llave].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        df_hist[col_llave] = df_hist[col_llave].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
         # Cruce de datos
         df_final = pd.merge(
             df_nuevo, 
