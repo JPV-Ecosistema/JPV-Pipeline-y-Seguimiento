@@ -20,7 +20,6 @@ def cargar_excel_especifico(archivo, es_reporte_acciones=False):
     if archivo is None: return None
     
     # Si es el reporte de acciones, saltamos las 5 filas de identificación
-    # (Pandas usa índice 0, así que skiprows=5 empieza a leer en la fila 6)
     skip = 5 if es_reporte_acciones else 0
     
     df = pd.read_excel(archivo, skiprows=skip)
@@ -58,8 +57,7 @@ if archivo_nuevo and archivo_historial:
             if c not in df_hist.columns:
                 df_hist[c] = 0.0 if 'Probabilidad' in c else ""
 
-        # --- CAMBIO QUIRÚRGICO: ESTANDARIZAR TIPO DE DATO PARA EL CRUCE ---
-        # Evita el ValueError de pandas al mezclar texto con números
+        # Estandarizar tipo de dato para el cruce (evita ValueError)
         df_nuevo[col_llave] = df_nuevo[col_llave].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df_hist[col_llave] = df_hist[col_llave].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
@@ -72,8 +70,18 @@ if archivo_nuevo and archivo_historial:
             suffixes=('', '_old')
         )
 
-        # Rellenar valores previos si existen
-        df_final['Probabilidad cierre 2026'] = df_final['Probabilidad cierre 2026'].fillna(0.0)
+        # --- CAMBIO QUIRÚRGICO: COMPATIBILIDAD DE TIPOS PARA STREAMLIT ---
+        # Aseguramos que los tipos de datos en el DataFrame coincidan exactamente con la configuración de la tabla
+        
+        # 1. Probabilidad debe ser numérico
+        df_final['Probabilidad cierre 2026'] = pd.to_numeric(df_final['Probabilidad cierre 2026'], errors='coerce').fillna(0.0)
+        
+        # 2. Fecha debe ser formato fecha real (evita que Streamlit falle al leer textos o NaNs)
+        df_final['Fecha probable de facturación'] = pd.to_datetime(df_final['Fecha probable de facturación'], errors='coerce').dt.date
+        
+        # 3. Observaciones debe ser texto puro (evita que los nulos se interpreten como flotantes)
+        df_final['Observaciones'] = df_final['Observaciones'].astype(str).replace(['nan', 'None', '<NA>'], '')
+        # ------------------------------------------------------------------
         
         st.subheader("Panel de Gestión Semanal")
         
