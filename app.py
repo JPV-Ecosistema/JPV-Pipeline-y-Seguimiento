@@ -288,17 +288,26 @@ if archivo_nuevo and archivo_historial:
                 st.caption(f"Mostrando **{len(df_filtrado)}** casos según los filtros aplicados.")
 
                 # --- SELECTOR DE CASO (sobre los casos filtrados) ---
-                lista_casos = sorted(df_filtrado['Número de caso'].astype(str).unique().tolist())
+                # Construir etiquetas con formato: "173278 — Turbina ENGIE"
+                df_filtrado['_etiqueta'] = (
+                    df_filtrado['Número de caso'].astype(str) + 
+                    ' — ' + 
+                    df_filtrado['Nickname'].astype(str).str.strip()
+                )
+                lista_etiquetas = sorted(df_filtrado['_etiqueta'].unique().tolist())
 
-                if not lista_casos:
+                if not lista_etiquetas:
                     st.warning("No hay casos que coincidan con los filtros seleccionados.")
                 else:
-                    caso_seleccionado = st.selectbox(
+                    etiqueta_seleccionada = st.selectbox(
                         "Selecciona el Número de Caso a gestionar:",
-                        options=["— Selecciona un caso —"] + lista_casos
+                        options=["— Selecciona un caso —"] + lista_etiquetas
                     )
 
-                    if caso_seleccionado != "— Selecciona un caso —":
+                    if etiqueta_seleccionada != "— Selecciona un caso —":
+                        # Extraer el número de caso desde la etiqueta seleccionada
+                        caso_seleccionado = etiqueta_seleccionada.split(' — ')[0].strip()
+
                         # Extraer la fila del caso desde el estado completo (no el filtrado)
                         fila_caso = st.session_state['df_pipeline_activo'][
                             st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
