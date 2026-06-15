@@ -287,14 +287,19 @@ if archivo_nuevo and archivo_historial:
                 # Indicador de cuántos casos quedan tras el filtro
                 st.caption(f"Mostrando **{len(df_filtrado)}** casos según los filtros aplicados.")
 
-                # --- SELECTOR DE CASO (sobre los casos filtrados) ---
+                # --- SELECTOR DE CASO (ordenado de más antiguo a más nuevo por número de caso) ---
                 # Construir etiquetas con formato: "173278 — Turbina ENGIE"
-                df_filtrado['_etiqueta'] = (
-                    df_filtrado['Número de caso'].astype(str) + 
-                    ' — ' + 
-                    df_filtrado['Nickname'].astype(str).str.strip()
+                df_filtrado['_num_caso_int'] = pd.to_numeric(
+                    df_filtrado['Número de caso'].astype(str).str.replace(r'\.0$', '', regex=True),
+                    errors='coerce'
                 )
-                lista_etiquetas = sorted(df_filtrado['_etiqueta'].unique().tolist())
+                df_filtrado_ordenado = df_filtrado.sort_values('_num_caso_int', ascending=True)
+                df_filtrado_ordenado['_etiqueta'] = (
+                    df_filtrado_ordenado['Número de caso'].astype(str) +
+                    ' — ' +
+                    df_filtrado_ordenado['Nickname'].astype(str).str.strip()
+                )
+                lista_etiquetas = df_filtrado_ordenado['_etiqueta'].unique().tolist()
 
                 if not lista_etiquetas:
                     st.warning("No hay casos que coincidan con los filtros seleccionados.")
@@ -315,29 +320,64 @@ if archivo_nuevo and archivo_historial:
 
                         st.divider()
 
+                        # --- BLOQUE DESTACADO: NÚMERO DE CASO, NICKNAME Y DÍAS ---
+                        # Calcular días desde creación hasta hoy
+                        try:
+                            fecha_creacion = pd.to_datetime(fila_caso.get('Creado en', ''), errors='coerce')
+                            dias_activo = (datetime.now() - fecha_creacion).days if pd.notna(fecha_creacion) else None
+                        except:
+                            dias_activo = None
+
+                        col_dest1, col_dest2, col_dest3 = st.columns(3)
+                        with col_dest1:
+                            st.markdown(f"""
+                                <div style='background-color:#1e3a5f; padding:16px; border-radius:10px; text-align:center;'>
+                                    <div style='color:#a0b4c8; font-size:13px; margin-bottom:4px;'>NÚMERO DE CASO</div>
+                                    <div style='color:#ffffff; font-size:28px; font-weight:bold;'>{fila_caso.get('Número de caso', '')}</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                        with col_dest2:
+                            st.markdown(f"""
+                                <div style='background-color:#1e3a5f; padding:16px; border-radius:10px; text-align:center;'>
+                                    <div style='color:#a0b4c8; font-size:13px; margin-bottom:4px;'>NICKNAME</div>
+                                    <div style='color:#ffffff; font-size:22px; font-weight:bold;'>{fila_caso.get('Nickname', '')}</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                        with col_dest3:
+                            if dias_activo is not None:
+                                color_dias = '#c0392b' if dias_activo > 365 else '#e67e22' if dias_activo > 180 else '#27ae60'
+                                st.markdown(f"""
+                                    <div style='background-color:{color_dias}; padding:16px; border-radius:10px; text-align:center;'>
+                                        <div style='color:#ffffff; font-size:13px; margin-bottom:4px;'>DÍAS EN CARTERA</div>
+                                        <div style='color:#ffffff; font-size:36px; font-weight:bold;'>{dias_activo}</div>
+                                        <div style='color:#ffffff; font-size:11px;'>desde {fecha_creacion.strftime("%d/%m/%Y")}</div>
+                                    </div>
+                                """, unsafe_allow_html=True)
+                            else:
+                                st.metric("Días en cartera", "Sin fecha")
+
+                        st.divider()
+
                         # --- BLOQUE DE DATOS DE SOLO LECTURA ---
                         st.markdown("##### 📄 Datos del Caso")
                         col_a, col_b, col_c = st.columns(3)
                         with col_a:
-                            st.text_input("Número de caso",         value=str(fila_caso.get('Número de caso', '')),                    disabled=True)
-                            st.text_input("Número de siniestro",    value=str(fila_caso.get('Número de siniestro', '')),               disabled=True)
-                            st.text_input("Nickname",               value=str(fila_caso.get('Nickname', '')),                          disabled=True)
-                            st.text_input("División",               value=str(fila_caso.get('División', '')),                          disabled=True)
-                            st.text_input("Compañía de seguros",    value=str(fila_caso.get('Compañía de seguros', '')),               disabled=True)
-                            st.text_input("Corredora",              value=str(fila_caso.get('Corredora', '')),                         disabled=True)
-                            st.text_input("Ajustador senior",       value=str(fila_caso.get('Ajustador senior', '')),                  disabled=True)
+                            st.text_input("Número de siniestro",    value=str(fila_caso.get('Número de siniestro', '')),                disabled=True)
+                            st.text_input("División",               value=str(fila_caso.get('División', '')),                           disabled=True)
+                            st.text_input("Compañía de seguros",    value=str(fila_caso.get('Compañía de seguros', '')),                disabled=True)
+                            st.text_input("Corredora",              value=str(fila_caso.get('Corredora', '')),                          disabled=True)
+                            st.text_input("Ajustador senior",       value=str(fila_caso.get('Ajustador senior', '')),                   disabled=True)
                         with col_b:
-                            st.text_input("Asegurado",              value=str(fila_caso.get('Asegurado', '')),                         disabled=True)
-                            st.text_input("Creado en",              value=str(fila_caso.get('Creado en', '')),                         disabled=True)
-                            st.text_input("Divisa",                 value=str(fila_caso.get('Divisa', '')),                            disabled=True)
-                            st.text_input("Pérdida bruta",          value=str(fila_caso.get('Perdida bruta (en moneda del caso)', '')), disabled=True)
+                            st.text_input("Asegurado",              value=str(fila_caso.get('Asegurado', '')),                          disabled=True)
+                            st.text_input("Creado en",              value=str(fila_caso.get('Creado en', '')),                          disabled=True)
+                            st.text_input("Divisa",                 value=str(fila_caso.get('Divisa', '')),                             disabled=True)
+                            st.text_input("Pérdida bruta",          value=str(fila_caso.get('Perdida bruta (en moneda del caso)', '')),  disabled=True)
                             st.text_input("Monto asegurado",        value=str(fila_caso.get('Monto asegurado (en moneda del caso)', '')), disabled=True)
-                            st.text_input("Honorarios (UF)",        value=str(fila_caso.get('Honorarios (UF)', '')),                   disabled=True)
+                            st.text_input("Honorarios (UF)",        value=str(fila_caso.get('Honorarios (UF)', '')),                    disabled=True)
                         with col_c:
-                            st.text_input("Último movimiento",      value=str(fila_caso.get('Último movimiento', '')),                 disabled=True)
-                            st.text_area("Contenido último mov.",   value=str(fila_caso.get('Contenido último movimiento', '')),       disabled=True, height=100)
-                            st.text_input("Probabilidad cierre 2026", value=str(fila_caso.get('Probabilidad cierre 2026', '')),        disabled=True)
-                            st.text_input("Indicación probabilidad", value=str(fila_caso.get('Indicación Probabilidad', '')),          disabled=True)
+                            st.text_input("Último movimiento",      value=str(fila_caso.get('Último movimiento', '')),                  disabled=True)
+                            st.text_area("Contenido último mov.",   value=str(fila_caso.get('Contenido último movimiento', '')),        disabled=True, height=100)
+                            st.text_input("Indicación probabilidad", value=str(fila_caso.get('Indicación Probabilidad', '')),           disabled=True)
                             st.text_input("Hon. Probables 2026 (UF)", value=str(round(float(fila_caso.get('Hon Probables 2026', 0) or 0), 2)), disabled=True)
 
                         st.divider()
@@ -353,8 +393,17 @@ if archivo_nuevo and archivo_historial:
 
                         st.divider()
 
-                        # --- BLOQUE EDITABLE: NUEVA OBSERVACIÓN Y FECHA ---
+                        # --- BLOQUE EDITABLE: PROBABILIDAD, OBSERVACIÓN Y FECHA ---
                         st.markdown("##### ✏️ Actualizar Seguimiento")
+
+                        prob_actual = str(fila_caso.get('Probabilidad cierre 2026', '0%'))
+                        opciones_prob = ["0%", "25%", "50%", "75%", "100%"]
+                        idx_prob_actual = opciones_prob.index(prob_actual) if prob_actual in opciones_prob else 0
+                        nueva_prob = st.selectbox(
+                            "Probabilidad de cierre 2026",
+                            options=opciones_prob,
+                            index=idx_prob_actual
+                        )
 
                         nueva_obs = st.text_area(
                             "Nueva Observación (obligatorio) *",
@@ -376,15 +425,23 @@ if archivo_nuevo and archivo_historial:
                                 # Registrar fecha y hora de actualización automáticamente
                                 timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
                                 obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
-                                
+
+                                # Calcular honorarios probables actualizados con nueva probabilidad
+                                hon_uf = float(fila_caso.get('Honorarios (UF)', 0) or 0)
+                                prob_decimal = float(nueva_prob.replace('%', '')) / 100
+                                hon_probables_nuevo = hon_uf * prob_decimal
+
                                 # Actualizar la fila correspondiente en el estado compartido
                                 idx = st.session_state['df_pipeline_activo'][
                                     st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
                                 ].index[0]
-                                
+
                                 st.session_state['df_pipeline_activo'].at[idx, 'Observaciones'] = obs_con_fecha
                                 st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = nueva_fecha
-                                
+                                st.session_state['df_pipeline_activo'].at[idx, 'Probabilidad cierre 2026'] = nueva_prob
+                                st.session_state['df_pipeline_activo'].at[idx, 'Indicación Probabilidad'] = PROB_MAP.get(nueva_prob, '')
+                                st.session_state['df_pipeline_activo'].at[idx, 'Hon Probables 2026'] = hon_probables_nuevo
+
                                 st.success(f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}.")
                                 st.rerun()
 
