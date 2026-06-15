@@ -121,7 +121,38 @@ if archivo_nuevo and archivo_historial:
             # df_pipeline_activo es la fuente de verdad en memoria que comparten Tab1 y Tab2
             if 'df_pipeline_activo' not in st.session_state:
                 st.session_state['df_pipeline_activo'] = df_final.copy()
-            
+
+            # --- BLOQUE DE FILTROS PARA PESTAÑA 2 ---
+            # Los valores se leen dinámicamente desde el archivo cargado
+            st.markdown("---")
+            st.markdown("#### 🔎 Filtros para Seguimiento de Caso")
+            col_f1, col_f2 = st.columns(2)
+
+            with col_f1:
+                divisiones_disponibles = sorted(
+                    st.session_state['df_pipeline_activo']['División']
+                    .dropna().astype(str).str.strip()
+                    .replace('', pd.NA).dropna().unique().tolist()
+                )
+                filtro_division = st.selectbox(
+                    "Filtrar por División:",
+                    options=["Todas"] + divisiones_disponibles
+                )
+
+            with col_f2:
+                ajustadores_disponibles = sorted(
+                    st.session_state['df_pipeline_activo']['Ajustador senior']
+                    .dropna().astype(str).str.strip()
+                    .replace('', pd.NA).dropna().unique().tolist()
+                )
+                filtro_ajustadores = st.multiselect(
+                    "Filtrar por Ajustador(es):",
+                    options=ajustadores_disponibles,
+                    placeholder="Todos los ajustadores"
+                )
+
+            st.markdown("---")
+
             # --- PESTAÑAS PRINCIPALES ---
             tab1, tab2 = st.tabs(["📋 Pipeline General", "🔍 Seguimiento de Caso"])
 
@@ -235,98 +266,118 @@ if archivo_nuevo and archivo_historial:
                 )
 
             # ==========================================
-            # PESTAÑA 2 — SEGUIMIENTO DE CASO (NUEVO)
+            # PESTAÑA 2 — SEGUIMIENTO DE CASO (CON FILTROS)
             # ==========================================
             with tab2:
                 st.subheader("🔍 Seguimiento Individual de Caso")
 
-                # --- SELECTOR DE CASO ---
-                df_activo = st.session_state['df_pipeline_activo']
-                lista_casos = sorted(df_activo['Número de caso'].astype(str).unique().tolist())
-                
-                caso_seleccionado = st.selectbox(
-                    "Selecciona el Número de Caso a gestionar:",
-                    options=["— Selecciona un caso —"] + lista_casos
-                )
+                # --- APLICAR FILTROS AL DATAFRAME DE ESTA PESTAÑA ---
+                df_filtrado = st.session_state['df_pipeline_activo'].copy()
 
-                if caso_seleccionado != "— Selecciona un caso —":
-                    # Extraer la fila del caso seleccionado
-                    fila_caso = df_activo[df_activo['Número de caso'].astype(str) == caso_seleccionado].iloc[0]
+                if filtro_division != "Todas":
+                    df_filtrado = df_filtrado[
+                        df_filtrado['División'].astype(str).str.strip() == filtro_division
+                    ]
 
-                    st.divider()
+                if filtro_ajustadores:
+                    df_filtrado = df_filtrado[
+                        df_filtrado['Ajustador senior'].astype(str).str.strip().isin(filtro_ajustadores)
+                    ]
 
-                    # --- BLOQUE DE DATOS DE SOLO LECTURA ---
-                    st.markdown("##### 📄 Datos del Caso")
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.text_input("Número de caso",         value=str(fila_caso.get('Número de caso', '')),                    disabled=True)
-                        st.text_input("Número de siniestro",    value=str(fila_caso.get('Número de siniestro', '')),               disabled=True)
-                        st.text_input("Nickname",               value=str(fila_caso.get('Nickname', '')),                          disabled=True)
-                        st.text_input("División",               value=str(fila_caso.get('División', '')),                          disabled=True)
-                        st.text_input("Compañía de seguros",    value=str(fila_caso.get('Compañía de seguros', '')),               disabled=True)
-                        st.text_input("Corredora",              value=str(fila_caso.get('Corredora', '')),                         disabled=True)
-                        st.text_input("Ajustador senior",       value=str(fila_caso.get('Ajustador senior', '')),                  disabled=True)
-                    with col_b:
-                        st.text_input("Asegurado",              value=str(fila_caso.get('Asegurado', '')),                         disabled=True)
-                        st.text_input("Creado en",              value=str(fila_caso.get('Creado en', '')),                         disabled=True)
-                        st.text_input("Divisa",                 value=str(fila_caso.get('Divisa', '')),                            disabled=True)
-                        st.text_input("Pérdida bruta",          value=str(fila_caso.get('Perdida bruta (en moneda del caso)', '')), disabled=True)
-                        st.text_input("Monto asegurado",        value=str(fila_caso.get('Monto asegurado (en moneda del caso)', '')), disabled=True)
-                        st.text_input("Honorarios (UF)",        value=str(fila_caso.get('Honorarios (UF)', '')),                   disabled=True)
-                    with col_c:
-                        st.text_input("Último movimiento",      value=str(fila_caso.get('Último movimiento', '')),                 disabled=True)
-                        st.text_area("Contenido último mov.",   value=str(fila_caso.get('Contenido último movimiento', '')),       disabled=True, height=100)
-                        st.text_input("Probabilidad cierre 2026", value=str(fila_caso.get('Probabilidad cierre 2026', '')),        disabled=True)
-                        st.text_input("Indicación probabilidad", value=str(fila_caso.get('Indicación Probabilidad', '')),          disabled=True)
-                        st.text_input("Hon. Probables 2026 (UF)", value=str(round(float(fila_caso.get('Hon Probables 2026', 0) or 0), 2)), disabled=True)
+                # Indicador de cuántos casos quedan tras el filtro
+                st.caption(f"Mostrando **{len(df_filtrado)}** casos según los filtros aplicados.")
 
-                    st.divider()
+                # --- SELECTOR DE CASO (sobre los casos filtrados) ---
+                lista_casos = sorted(df_filtrado['Número de caso'].astype(str).unique().tolist())
 
-                    # --- BLOQUE DE OBSERVACIÓN ANTERIOR ---
-                    obs_anterior = str(fila_caso.get('Observaciones', '') or '')
-                    if obs_anterior.strip():
-                        st.markdown("##### 📌 Última Observación Registrada")
-                        st.info(obs_anterior)
-                    else:
-                        st.markdown("##### 📌 Última Observación Registrada")
-                        st.warning("Este caso no tiene observaciones previas.")
-
-                    st.divider()
-
-                    # --- BLOQUE EDITABLE: NUEVA OBSERVACIÓN Y FECHA ---
-                    st.markdown("##### ✏️ Actualizar Seguimiento")
-
-                    nueva_obs = st.text_area(
-                        "Nueva Observación (obligatorio) *",
-                        placeholder="Escribe aquí el estado actual del caso...",
-                        height=120
+                if not lista_casos:
+                    st.warning("No hay casos que coincidan con los filtros seleccionados.")
+                else:
+                    caso_seleccionado = st.selectbox(
+                        "Selecciona el Número de Caso a gestionar:",
+                        options=["— Selecciona un caso —"] + lista_casos
                     )
 
-                    fecha_actual = fila_caso.get('Fecha probable de facturación', None)
-                    nueva_fecha = st.date_input(
-                        "Fecha probable de facturación",
-                        value=fecha_actual if pd.notna(fecha_actual) and fecha_actual != '' else None
-                    )
+                    if caso_seleccionado != "— Selecciona un caso —":
+                        # Extraer la fila del caso desde el estado completo (no el filtrado)
+                        fila_caso = st.session_state['df_pipeline_activo'][
+                            st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
+                        ].iloc[0]
 
-                    # --- BOTÓN DE GUARDAR ---
-                    if st.button("💾 Guardar Seguimiento", type="primary"):
-                        if not nueva_obs.strip():
-                            st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
+                        st.divider()
+
+                        # --- BLOQUE DE DATOS DE SOLO LECTURA ---
+                        st.markdown("##### 📄 Datos del Caso")
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.text_input("Número de caso",         value=str(fila_caso.get('Número de caso', '')),                    disabled=True)
+                            st.text_input("Número de siniestro",    value=str(fila_caso.get('Número de siniestro', '')),               disabled=True)
+                            st.text_input("Nickname",               value=str(fila_caso.get('Nickname', '')),                          disabled=True)
+                            st.text_input("División",               value=str(fila_caso.get('División', '')),                          disabled=True)
+                            st.text_input("Compañía de seguros",    value=str(fila_caso.get('Compañía de seguros', '')),               disabled=True)
+                            st.text_input("Corredora",              value=str(fila_caso.get('Corredora', '')),                         disabled=True)
+                            st.text_input("Ajustador senior",       value=str(fila_caso.get('Ajustador senior', '')),                  disabled=True)
+                        with col_b:
+                            st.text_input("Asegurado",              value=str(fila_caso.get('Asegurado', '')),                         disabled=True)
+                            st.text_input("Creado en",              value=str(fila_caso.get('Creado en', '')),                         disabled=True)
+                            st.text_input("Divisa",                 value=str(fila_caso.get('Divisa', '')),                            disabled=True)
+                            st.text_input("Pérdida bruta",          value=str(fila_caso.get('Perdida bruta (en moneda del caso)', '')), disabled=True)
+                            st.text_input("Monto asegurado",        value=str(fila_caso.get('Monto asegurado (en moneda del caso)', '')), disabled=True)
+                            st.text_input("Honorarios (UF)",        value=str(fila_caso.get('Honorarios (UF)', '')),                   disabled=True)
+                        with col_c:
+                            st.text_input("Último movimiento",      value=str(fila_caso.get('Último movimiento', '')),                 disabled=True)
+                            st.text_area("Contenido último mov.",   value=str(fila_caso.get('Contenido último movimiento', '')),       disabled=True, height=100)
+                            st.text_input("Probabilidad cierre 2026", value=str(fila_caso.get('Probabilidad cierre 2026', '')),        disabled=True)
+                            st.text_input("Indicación probabilidad", value=str(fila_caso.get('Indicación Probabilidad', '')),          disabled=True)
+                            st.text_input("Hon. Probables 2026 (UF)", value=str(round(float(fila_caso.get('Hon Probables 2026', 0) or 0), 2)), disabled=True)
+
+                        st.divider()
+
+                        # --- BLOQUE DE OBSERVACIÓN ANTERIOR ---
+                        obs_anterior = str(fila_caso.get('Observaciones', '') or '')
+                        if obs_anterior.strip():
+                            st.markdown("##### 📌 Última Observación Registrada")
+                            st.info(obs_anterior)
                         else:
-                            # Registrar fecha y hora de actualización automáticamente
-                            timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                            obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
-                            
-                            # Actualizar la fila correspondiente en el estado compartido
-                            idx = st.session_state['df_pipeline_activo'][
-                                st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
-                            ].index[0]
-                            
-                            st.session_state['df_pipeline_activo'].at[idx, 'Observaciones'] = obs_con_fecha
-                            st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = nueva_fecha
-                            
-                            st.success(f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}.")
-                            st.rerun()
+                            st.markdown("##### 📌 Última Observación Registrada")
+                            st.warning("Este caso no tiene observaciones previas.")
+
+                        st.divider()
+
+                        # --- BLOQUE EDITABLE: NUEVA OBSERVACIÓN Y FECHA ---
+                        st.markdown("##### ✏️ Actualizar Seguimiento")
+
+                        nueva_obs = st.text_area(
+                            "Nueva Observación (obligatorio) *",
+                            placeholder="Escribe aquí el estado actual del caso...",
+                            height=120
+                        )
+
+                        fecha_actual = fila_caso.get('Fecha probable de facturación', None)
+                        nueva_fecha = st.date_input(
+                            "Fecha probable de facturación",
+                            value=fecha_actual if pd.notna(fecha_actual) and fecha_actual != '' else None
+                        )
+
+                        # --- BOTÓN DE GUARDAR ---
+                        if st.button("💾 Guardar Seguimiento", type="primary"):
+                            if not nueva_obs.strip():
+                                st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
+                            else:
+                                # Registrar fecha y hora de actualización automáticamente
+                                timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                                obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
+                                
+                                # Actualizar la fila correspondiente en el estado compartido
+                                idx = st.session_state['df_pipeline_activo'][
+                                    st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
+                                ].index[0]
+                                
+                                st.session_state['df_pipeline_activo'].at[idx, 'Observaciones'] = obs_con_fecha
+                                st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = nueva_fecha
+                                
+                                st.success(f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}.")
+                                st.rerun()
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
