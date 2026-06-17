@@ -437,7 +437,7 @@ if archivo_nuevo and archivo_historial:
                                 ].index[0]
 
                                 st.session_state['df_pipeline_activo'].at[idx, 'Observaciones'] = obs_con_fecha
-                                st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = nueva_fecha
+                                st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = pd.to_datetime(nueva_fecha).date() if nueva_fecha else None
                                 st.session_state['df_pipeline_activo'].at[idx, 'Probabilidad cierre 2026'] = nueva_prob
                                 st.session_state['df_pipeline_activo'].at[idx, 'Indicación Probabilidad'] = PROB_MAP.get(nueva_prob, '')
                                 st.session_state['df_pipeline_activo'].at[idx, 'Hon Probables 2026'] = hon_probables_nuevo
