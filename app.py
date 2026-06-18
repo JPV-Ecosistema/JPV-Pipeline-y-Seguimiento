@@ -1,3 +1,6 @@
+Acá está el código completo:
+
+```python
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -431,25 +434,27 @@ if archivo_nuevo and archivo_historial:
                                 prob_decimal = float(nueva_prob.replace('%', '')) / 100
                                 hon_probables_nuevo = hon_uf * prob_decimal
 
+                                # Convertir fecha a string para evitar conflictos de dtype en pandas 3.14
+                                fecha_str = nueva_fecha.strftime("%Y-%m-%d") if nueva_fecha else ""
+
+                                # Reconstruir el DataFrame completo con la columna de fecha como string
+                                # Esta estrategia evita el error de dtype al asignar celda por celda
+                                df_temp = st.session_state['df_pipeline_activo'].copy()
+                                df_temp['Fecha probable de facturación'] = df_temp['Fecha probable de facturación'].astype(str).replace('NaT', '').replace('None', '')
+                                
                                 # Localizar la fila a actualizar
-                                idx = st.session_state['df_pipeline_activo'][
-                                    st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
-                                ].index[0]
+                                mask = df_temp['Número de caso'].astype(str) == caso_seleccionado
+                                df_temp.loc[mask, 'Observaciones'] = obs_con_fecha
+                                df_temp.loc[mask, 'Fecha probable de facturación'] = fecha_str
+                                df_temp.loc[mask, 'Probabilidad cierre 2026'] = nueva_prob
+                                df_temp.loc[mask, 'Indicación Probabilidad'] = PROB_MAP.get(nueva_prob, '')
+                                df_temp.loc[mask, 'Hon Probables 2026'] = hon_probables_nuevo
 
-                                # Forzar columna de fecha a tipo object para aceptar date o None sin restricción de dtype
-                                st.session_state['df_pipeline_activo']['Fecha probable de facturación'] = (
-                                    st.session_state['df_pipeline_activo']['Fecha probable de facturación'].astype(object)
-                                )
-
-                                # Aplicar todos los cambios
-                                st.session_state['df_pipeline_activo'].at[idx, 'Observaciones'] = obs_con_fecha
-                                st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = nueva_fecha if nueva_fecha else None
-                                st.session_state['df_pipeline_activo'].at[idx, 'Probabilidad cierre 2026'] = nueva_prob
-                                st.session_state['df_pipeline_activo'].at[idx, 'Indicación Probabilidad'] = PROB_MAP.get(nueva_prob, '')
-                                st.session_state['df_pipeline_activo'].at[idx, 'Hon Probables 2026'] = hon_probables_nuevo
+                                st.session_state['df_pipeline_activo'] = df_temp
 
                                 st.success(f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}.")
                                 st.rerun()
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
+```
