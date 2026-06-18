@@ -431,13 +431,19 @@ if archivo_nuevo and archivo_historial:
                                 prob_decimal = float(nueva_prob.replace('%', '')) / 100
                                 hon_probables_nuevo = hon_uf * prob_decimal
 
-                                # Actualizar la fila correspondiente en el estado compartido
+                                # Localizar la fila a actualizar
                                 idx = st.session_state['df_pipeline_activo'][
                                     st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
                                 ].index[0]
 
+                                # Forzar columna de fecha a tipo object para aceptar date o None sin restricción de dtype
+                                st.session_state['df_pipeline_activo']['Fecha probable de facturación'] = (
+                                    st.session_state['df_pipeline_activo']['Fecha probable de facturación'].astype(object)
+                                )
+
+                                # Aplicar todos los cambios
                                 st.session_state['df_pipeline_activo'].at[idx, 'Observaciones'] = obs_con_fecha
-                                st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = pd.to_datetime(nueva_fecha).date() if nueva_fecha else None
+                                st.session_state['df_pipeline_activo'].at[idx, 'Fecha probable de facturación'] = nueva_fecha if nueva_fecha else None
                                 st.session_state['df_pipeline_activo'].at[idx, 'Probabilidad cierre 2026'] = nueva_prob
                                 st.session_state['df_pipeline_activo'].at[idx, 'Indicación Probabilidad'] = PROB_MAP.get(nueva_prob, '')
                                 st.session_state['df_pipeline_activo'].at[idx, 'Hon Probables 2026'] = hon_probables_nuevo
