@@ -454,4 +454,3 @@ if archivo_nuevo and archivo_historial:
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
-```
