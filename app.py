@@ -155,7 +155,7 @@ if archivo_nuevo and archivo_historial:
             tab1, tab2 = st.tabs(["📋 Pipeline General", "🔍 Seguimiento de Caso"])
 
             # ==========================================
-            # PESTAÑA 1 — PIPELINE GENERAL
+            # PESTAÑA 1 — PIPELINE GENERAL (SIN CAMBIOS)
             # ==========================================
             with tab1:
 
@@ -251,7 +251,7 @@ if archivo_nuevo and archivo_historial:
                 )
 
             # ==========================================
-            # PESTAÑA 2 — SEGUIMIENTO DE CASO
+            # PESTAÑA 2 — SEGUIMIENTO DE CASO (CON FILTROS)
             # ==========================================
             with tab2:
                 st.subheader("🔍 Seguimiento Individual de Caso")
@@ -391,6 +391,12 @@ if archivo_nuevo and archivo_historial:
                             value=fecha_actual if pd.notna(fecha_actual) and fecha_actual != '' else None
                         )
 
+                        # --- MENSAJE DE ÉXITO PERSISTENTE ---
+                        if st.session_state.get("_ultimo_guardado"):
+                            st.success(st.session_state["_ultimo_guardado"])
+                            st.session_state["_ultimo_guardado"] = None
+
+                        # --- BOTÓN DE GUARDAR ---
                         if st.button("💾 Guardar Seguimiento", type="primary"):
                             if not nueva_obs.strip():
                                 st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
@@ -398,25 +404,24 @@ if archivo_nuevo and archivo_historial:
                                 timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
                                 obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
 
-                                hon_uf = float(fila_caso.get('Honorarios (UF)', 0) or 0)
-                                prob_decimal = float(nueva_prob.replace('%', '')) / 100
+                                hon_uf = float(fila_caso.get("Honorarios (UF)", 0) or 0)
+                                prob_decimal = float(nueva_prob.replace("%", "")) / 100
                                 hon_probables_nuevo = hon_uf * prob_decimal
 
                                 fecha_str = nueva_fecha.strftime("%Y-%m-%d") if nueva_fecha else ""
 
-                                df_temp = st.session_state['df_pipeline_activo'].copy()
-                                df_temp['Fecha probable de facturación'] = df_temp['Fecha probable de facturación'].astype(str).replace('NaT', '').replace('None', '')
+                                df_temp = st.session_state["df_pipeline_activo"].copy()
+                                df_temp["Fecha probable de facturación"] = df_temp["Fecha probable de facturación"].astype(str).replace("NaT", "").replace("None", "")
 
-                                mask = df_temp['Número de caso'].astype(str) == caso_seleccionado
-                                df_temp.loc[mask, 'Observaciones'] = obs_con_fecha
-                                df_temp.loc[mask, 'Fecha probable de facturación'] = fecha_str
-                                df_temp.loc[mask, 'Probabilidad cierre 2026'] = nueva_prob
-                                df_temp.loc[mask, 'Indicación Probabilidad'] = PROB_MAP.get(nueva_prob, '')
-                                df_temp.loc[mask, 'Hon Probables 2026'] = hon_probables_nuevo
+                                mask = df_temp["Número de caso"].astype(str) == caso_seleccionado
+                                df_temp.loc[mask, "Observaciones"] = obs_con_fecha
+                                df_temp.loc[mask, "Fecha probable de facturación"] = fecha_str
+                                df_temp.loc[mask, "Probabilidad cierre 2026"] = nueva_prob
+                                df_temp.loc[mask, "Indicación Probabilidad"] = PROB_MAP.get(nueva_prob, "")
+                                df_temp.loc[mask, "Hon Probables 2026"] = hon_probables_nuevo
 
-                                st.session_state['df_pipeline_activo'] = df_temp
-
-                                st.success(f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}.")
+                                st.session_state["df_pipeline_activo"] = df_temp
+                                st.session_state["_ultimo_guardado"] = f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}."
                                 st.rerun()
 
 else:
