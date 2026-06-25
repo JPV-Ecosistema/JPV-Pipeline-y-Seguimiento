@@ -118,12 +118,10 @@ if archivo_nuevo and archivo_historial:
             df_final = df_final[COLUMNAS_FINALES]
 
             # --- INICIALIZAR ESTADO COMPARTIDO ENTRE PESTAÑAS ---
-            # df_pipeline_activo es la fuente de verdad en memoria que comparten Tab1 y Tab2
             if 'df_pipeline_activo' not in st.session_state:
                 st.session_state['df_pipeline_activo'] = df_final.copy()
 
             # --- BLOQUE DE FILTROS PARA PESTAÑA 2 ---
-            # Los valores se leen dinámicamente desde el archivo cargado
             st.markdown("---")
             st.markdown("#### 🔎 Filtros para Seguimiento de Caso")
             col_f1, col_f2 = st.columns(2)
@@ -157,11 +155,10 @@ if archivo_nuevo and archivo_historial:
             tab1, tab2 = st.tabs(["📋 Pipeline General", "🔍 Seguimiento de Caso"])
 
             # ==========================================
-            # PESTAÑA 1 — PIPELINE GENERAL (SIN CAMBIOS)
+            # PESTAÑA 1 — PIPELINE GENERAL
             # ==========================================
             with tab1:
 
-                # --- CAMBIO QUIRÚRGICO: REPORTE DE CASOS NUEVOS Y SALIENTES ---
                 st.subheader("Panel de Gestión Semanal")
                 
                 casos_viejos = set(df_hist[col_llave].unique())
@@ -176,14 +173,12 @@ if archivo_nuevo and archivo_historial:
                 with col_res2:
                     st.warning(f"🔴 **Salidas:** **{len(salientes_detectados)} casos** del pipeline anterior ya no están en el reporte.")
                 
-                # Acordeón para revisar los casos que salieron del pipeline
                 if not salientes_detectados.empty:
                     with st.expander("🔍 Ver listado de casos salientes"):
                         columnas_salientes = [col_llave, 'Nickname', 'Probabilidad cierre 2026', 'Observaciones']
                         cols_mostrar = [c for c in columnas_salientes if c in salientes_detectados.columns]
                         st.dataframe(salientes_detectados[cols_mostrar].fillna(''), hide_index=True)
 
-                # --- FUNCIÓN DE ESTILO PARA STREAMLIT ---
                 def color_semaforo(val):
                     if val in ["75%", "100%"]:
                         return 'background-color: #c6efce; color: #006100;'
@@ -193,9 +188,14 @@ if archivo_nuevo and archivo_historial:
                         return 'background-color: #ffc7ce; color: #9c0006;'
                     return ''
 
-                df_styled = st.session_state['df_pipeline_activo'].style.map(color_semaforo, subset=['Probabilidad cierre 2026'])
+                # Reconvertir fecha a tipo date antes de mostrar en el editor
+                # (Tab2 la convierte a string al guardar, esto la restaura para Tab1)
+                df_para_editor = st.session_state['df_pipeline_activo'].copy()
+                df_para_editor['Fecha probable de facturación'] = pd.to_datetime(
+                    df_para_editor['Fecha probable de facturación'], errors='coerce'
+                ).dt.date
+                df_styled = df_para_editor.style.map(color_semaforo, subset=['Probabilidad cierre 2026'])
 
-                # --- EDITOR DE DATOS ---
                 df_editado = st.data_editor(
                     df_styled,
                     column_config={
@@ -210,45 +210,30 @@ if archivo_nuevo and archivo_historial:
                     use_container_width=True
                 )
 
-                # --- RECALCULAR TRAS EDICIÓN ---
                 prob_num_final = df_editado['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
                 df_editado['Hon Probables 2026'] = df_editado['Honorarios (UF)'] * prob_num_final
                 df_editado['Indicación Probabilidad'] = df_editado['Probabilidad cierre 2026'].map(PROB_MAP)
                 
-                # Sincronizar cambios del editor de vuelta al estado compartido
                 st.session_state['df_pipeline_activo'] = df_editado.copy()
                 
                 st.metric("FACTURACIÓN PROBABLE TOTAL (UF)", f"{df_editado['Hon Probables 2026'].sum():,.2f}")
 
-                # --- CAMBIO QUIRÚRGICO: FORMATEO CONDICIONAL NATIVO PARA EXCEL ---
                 fecha_desc = datetime.now().strftime("%d-%m-%y")
                 buffer = io.BytesIO()
                 df_excel = df_editado.copy()
-                
-                # Devolver a decimal para que Excel lo calcule matemáticamente
                 df_excel['Probabilidad cierre 2026'] = df_excel['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
 
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     nombre_hoja_descarga = f"Casos {fecha_desc}"
                     df_excel.to_excel(writer, sheet_name=nombre_hoja_descarga, index=False)
-                    
-                    # Obtener los objetos del libro y la hoja para inyectar formatos
                     workbook = writer.book
                     worksheet = writer.sheets[nombre_hoja_descarga]
-                    
-                    # Crear los formatos de Excel
                     formato_pct = workbook.add_format({'num_format': '0%'})
                     formato_verde = workbook.add_format({'bg_color': '#c6efce', 'font_color': '#006100'})
                     formato_amarillo = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c5700'})
                     formato_rojo = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
-
-                    # Encontrar el índice numérico de la columna de Probabilidad (base 0)
                     idx_prob = COLUMNAS_FINALES.index('Probabilidad cierre 2026')
-                    
-                    # Aplicar formato de porcentaje a toda la columna
                     worksheet.set_column(idx_prob, idx_prob, 15, formato_pct)
-                    
-                    # Aplicar el Semáforo Condicional directo al Excel
                     filas_totales = len(df_excel)
                     worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob, 
                                                  {'type': 'cell', 'criteria': '>=', 'value': 0.75, 'format': formato_verde})
@@ -266,12 +251,11 @@ if archivo_nuevo and archivo_historial:
                 )
 
             # ==========================================
-            # PESTAÑA 2 — SEGUIMIENTO DE CASO (CON FILTROS)
+            # PESTAÑA 2 — SEGUIMIENTO DE CASO
             # ==========================================
             with tab2:
                 st.subheader("🔍 Seguimiento Individual de Caso")
 
-                # --- APLICAR FILTROS AL DATAFRAME DE ESTA PESTAÑA ---
                 df_filtrado = st.session_state['df_pipeline_activo'].copy()
 
                 if filtro_division != "Todas":
@@ -284,11 +268,8 @@ if archivo_nuevo and archivo_historial:
                         df_filtrado['Ajustador senior'].astype(str).str.strip().isin(filtro_ajustadores)
                     ]
 
-                # Indicador de cuántos casos quedan tras el filtro
                 st.caption(f"Mostrando **{len(df_filtrado)}** casos según los filtros aplicados.")
 
-                # --- SELECTOR DE CASO (ordenado de más antiguo a más nuevo por número de caso) ---
-                # Construir etiquetas con formato: "173278 — Turbina ENGIE"
                 df_filtrado['_num_caso_int'] = pd.to_numeric(
                     df_filtrado['Número de caso'].astype(str).str.replace(r'\.0$', '', regex=True),
                     errors='coerce'
@@ -310,18 +291,14 @@ if archivo_nuevo and archivo_historial:
                     )
 
                     if etiqueta_seleccionada != "— Selecciona un caso —":
-                        # Extraer el número de caso desde la etiqueta seleccionada
                         caso_seleccionado = etiqueta_seleccionada.split(' — ')[0].strip()
 
-                        # Extraer la fila del caso desde el estado completo (no el filtrado)
                         fila_caso = st.session_state['df_pipeline_activo'][
                             st.session_state['df_pipeline_activo']['Número de caso'].astype(str) == caso_seleccionado
                         ].iloc[0]
 
                         st.divider()
 
-                        # --- BLOQUE DESTACADO: NÚMERO DE CASO, NICKNAME Y DÍAS ---
-                        # Calcular días desde creación hasta hoy
                         try:
                             fecha_creacion = pd.to_datetime(fila_caso.get('Creado en', ''), errors='coerce')
                             dias_activo = (datetime.now() - fecha_creacion).days if pd.notna(fecha_creacion) else None
@@ -358,31 +335,29 @@ if archivo_nuevo and archivo_historial:
 
                         st.divider()
 
-                        # --- BLOQUE DE DATOS DE SOLO LECTURA ---
                         st.markdown("##### 📄 Datos del Caso")
                         col_a, col_b, col_c = st.columns(3)
                         with col_a:
-                            st.text_input("Número de siniestro",    value=str(fila_caso.get('Número de siniestro', '')),                disabled=True)
-                            st.text_input("División",               value=str(fila_caso.get('División', '')),                           disabled=True)
-                            st.text_input("Compañía de seguros",    value=str(fila_caso.get('Compañía de seguros', '')),                disabled=True)
-                            st.text_input("Corredora",              value=str(fila_caso.get('Corredora', '')),                          disabled=True)
-                            st.text_input("Ajustador senior",       value=str(fila_caso.get('Ajustador senior', '')),                   disabled=True)
+                            st.text_input("Número de siniestro",    value=str(fila_caso.get('Número de siniestro', '')),                 disabled=True)
+                            st.text_input("División",               value=str(fila_caso.get('División', '')),                            disabled=True)
+                            st.text_input("Compañía de seguros",    value=str(fila_caso.get('Compañía de seguros', '')),                 disabled=True)
+                            st.text_input("Corredora",              value=str(fila_caso.get('Corredora', '')),                           disabled=True)
+                            st.text_input("Ajustador senior",       value=str(fila_caso.get('Ajustador senior', '')),                    disabled=True)
                         with col_b:
-                            st.text_input("Asegurado",              value=str(fila_caso.get('Asegurado', '')),                          disabled=True)
-                            st.text_input("Creado en",              value=str(fila_caso.get('Creado en', '')),                          disabled=True)
-                            st.text_input("Divisa",                 value=str(fila_caso.get('Divisa', '')),                             disabled=True)
-                            st.text_input("Pérdida bruta",          value=str(fila_caso.get('Perdida bruta (en moneda del caso)', '')),  disabled=True)
+                            st.text_input("Asegurado",              value=str(fila_caso.get('Asegurado', '')),                           disabled=True)
+                            st.text_input("Creado en",              value=str(fila_caso.get('Creado en', '')),                           disabled=True)
+                            st.text_input("Divisa",                 value=str(fila_caso.get('Divisa', '')),                              disabled=True)
+                            st.text_input("Pérdida bruta",          value=str(fila_caso.get('Perdida bruta (en moneda del caso)', '')),   disabled=True)
                             st.text_input("Monto asegurado",        value=str(fila_caso.get('Monto asegurado (en moneda del caso)', '')), disabled=True)
-                            st.text_input("Honorarios (UF)",        value=str(fila_caso.get('Honorarios (UF)', '')),                    disabled=True)
+                            st.text_input("Honorarios (UF)",        value=str(fila_caso.get('Honorarios (UF)', '')),                     disabled=True)
                         with col_c:
-                            st.text_input("Último movimiento",      value=str(fila_caso.get('Último movimiento', '')),                  disabled=True)
-                            st.text_area("Contenido último mov.",   value=str(fila_caso.get('Contenido último movimiento', '')),        disabled=True, height=100)
-                            st.text_input("Indicación probabilidad", value=str(fila_caso.get('Indicación Probabilidad', '')),           disabled=True)
+                            st.text_input("Último movimiento",      value=str(fila_caso.get('Último movimiento', '')),                   disabled=True)
+                            st.text_area("Contenido último mov.",   value=str(fila_caso.get('Contenido último movimiento', '')),         disabled=True, height=100)
+                            st.text_input("Indicación probabilidad", value=str(fila_caso.get('Indicación Probabilidad', '')),            disabled=True)
                             st.text_input("Hon. Probables 2026 (UF)", value=str(round(float(fila_caso.get('Hon Probables 2026', 0) or 0), 2)), disabled=True)
 
                         st.divider()
 
-                        # --- BLOQUE DE OBSERVACIÓN ANTERIOR ---
                         obs_anterior = str(fila_caso.get('Observaciones', '') or '')
                         if obs_anterior.strip():
                             st.markdown("##### 📌 Última Observación Registrada")
@@ -393,7 +368,6 @@ if archivo_nuevo and archivo_historial:
 
                         st.divider()
 
-                        # --- BLOQUE EDITABLE: PROBABILIDAD, OBSERVACIÓN Y FECHA ---
                         st.markdown("##### ✏️ Actualizar Seguimiento")
 
                         prob_actual = str(fila_caso.get('Probabilidad cierre 2026', '0%'))
@@ -417,29 +391,22 @@ if archivo_nuevo and archivo_historial:
                             value=fecha_actual if pd.notna(fecha_actual) and fecha_actual != '' else None
                         )
 
-                        # --- BOTÓN DE GUARDAR ---
                         if st.button("💾 Guardar Seguimiento", type="primary"):
                             if not nueva_obs.strip():
                                 st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
                             else:
-                                # Registrar fecha y hora de actualización automáticamente
                                 timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
                                 obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
 
-                                # Calcular honorarios probables actualizados con nueva probabilidad
                                 hon_uf = float(fila_caso.get('Honorarios (UF)', 0) or 0)
                                 prob_decimal = float(nueva_prob.replace('%', '')) / 100
                                 hon_probables_nuevo = hon_uf * prob_decimal
 
-                                # Convertir fecha a string para evitar conflictos de dtype en pandas 3.14
                                 fecha_str = nueva_fecha.strftime("%Y-%m-%d") if nueva_fecha else ""
 
-                                # Reconstruir el DataFrame completo con la columna de fecha como string
-                                # Esta estrategia evita el error de dtype al asignar celda por celda
                                 df_temp = st.session_state['df_pipeline_activo'].copy()
                                 df_temp['Fecha probable de facturación'] = df_temp['Fecha probable de facturación'].astype(str).replace('NaT', '').replace('None', '')
-                                
-                                # Localizar la fila a actualizar
+
                                 mask = df_temp['Número de caso'].astype(str) == caso_seleccionado
                                 df_temp.loc[mask, 'Observaciones'] = obs_con_fecha
                                 df_temp.loc[mask, 'Fecha probable de facturación'] = fecha_str
