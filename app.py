@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import io
 import os
@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -19,6 +19,15 @@ ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
 def ahora_cl():
     """Hora actual en Chile (naive, ya ajustada por CLT/CLST), sin depender de la zona horaria del servidor."""
     return datetime.now(ZONA_HORARIA_CL).replace(tzinfo=None)
+
+def calcular_rangos_semana():
+    """Devuelve (inicio, fin) de la semana pasada y de esta semana (lunes a domingo), según la fecha actual en Chile."""
+    hoy = ahora_cl().date()
+    inicio_semana_actual = hoy - timedelta(days=hoy.weekday())
+    fin_semana_actual = inicio_semana_actual + timedelta(days=6)
+    inicio_semana_pasada = inicio_semana_actual - timedelta(days=7)
+    fin_semana_pasada = inicio_semana_actual - timedelta(days=1)
+    return inicio_semana_pasada, fin_semana_pasada, inicio_semana_actual, fin_semana_actual
 
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
@@ -407,6 +416,33 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                         columnas_salientes = [col_llave, 'Nickname', 'Probabilidad cierre 2026', 'Observaciones']
                         cols_mostrar = [c for c in columnas_salientes if c in salientes_detectados.columns]
                         st.dataframe(salientes_detectados[cols_mostrar].fillna(''), hide_index=True)
+
+                st.markdown("---")
+                st.markdown("#### 🆕 Casos Nuevos por Fecha de Creación")
+
+                inicio_sp, fin_sp, inicio_se, fin_se = calcular_rangos_semana()
+
+                df_creacion = st.session_state['df_pipeline_activo'].copy()
+                df_creacion['_fecha_creado'] = pd.to_datetime(df_creacion['Creado en'], errors='coerce').dt.date
+
+                casos_semana_pasada = df_creacion[
+                    (df_creacion['_fecha_creado'] >= inicio_sp) & (df_creacion['_fecha_creado'] <= fin_sp)
+                ]
+                casos_esta_semana = df_creacion[
+                    (df_creacion['_fecha_creado'] >= inicio_se) & (df_creacion['_fecha_creado'] <= fin_se)
+                ]
+
+                columnas_nuevos = [c for c in [col_llave, 'Nickname', 'División', 'Ajustador senior', 'Creado en', 'Probabilidad cierre 2026'] if c in df_creacion.columns]
+
+                col_n1, col_n2 = st.columns(2)
+                with col_n1:
+                    st.info(f"📅 **Casos Nuevos Semana Pasada** ({inicio_sp.strftime('%d/%m')} al {fin_sp.strftime('%d/%m')}): **{len(casos_semana_pasada)} casos**.")
+                    with st.expander(f"Ver detalle ({len(casos_semana_pasada)} casos)"):
+                        st.dataframe(casos_semana_pasada[columnas_nuevos].fillna(''), hide_index=True, use_container_width=True)
+                with col_n2:
+                    st.success(f"📅 **Casos Nuevos Esta Semana** ({inicio_se.strftime('%d/%m')} al {fin_se.strftime('%d/%m')}): **{len(casos_esta_semana)} casos**.")
+                    with st.expander(f"Ver detalle ({len(casos_esta_semana)} casos)"):
+                        st.dataframe(casos_esta_semana[columnas_nuevos].fillna(''), hide_index=True, use_container_width=True)
 
                 def color_semaforo(val):
                     if val in ["75%", "100%"]:
