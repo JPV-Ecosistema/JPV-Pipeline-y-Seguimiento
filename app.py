@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
@@ -292,7 +292,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and archivo_historial:
             # --- BLOQUE DE FILTROS PARA PESTAÑA 2 ---
             st.markdown("---")
             st.markdown("#### 🔎 Filtros para Seguimiento de Caso")
-            col_f1, col_f2 = st.columns(2)
+            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 
             with col_f1:
                 divisiones_disponibles = sorted(
@@ -315,6 +315,18 @@ if (df_nuevo_manual is not None or df_nube is not None) and archivo_historial:
                     "Filtrar por Ajustador(es):",
                     options=ajustadores_disponibles,
                     placeholder="Todos los ajustadores"
+                )
+
+            with col_f3:
+                filtro_probabilidad = st.multiselect(
+                    "Filtrar por Probabilidad de cierre:",
+                    options=["0%", "25%", "50%", "75%", "100%"],
+                    placeholder="Todas las probabilidades"
+                )
+
+            with col_f4:
+                filtro_sin_observaciones = st.checkbox(
+                    "Solo casos sin observaciones (posibles nuevos)"
                 )
 
             st.markdown("---")
@@ -438,7 +450,26 @@ if (df_nuevo_manual is not None or df_nube is not None) and archivo_historial:
                         df_filtrado['Ajustador senior'].astype(str).str.strip().isin(filtro_ajustadores)
                     ]
 
+                if filtro_probabilidad:
+                    df_filtrado = df_filtrado[
+                        df_filtrado['Probabilidad cierre 2026'].isin(filtro_probabilidad)
+                    ]
+
+                if filtro_sin_observaciones:
+                    df_filtrado = df_filtrado[
+                        df_filtrado['Observaciones'].astype(str).str.strip().isin(['', 'nan', 'None'])
+                    ]
+
                 st.caption(f"Mostrando **{len(df_filtrado)}** casos según los filtros aplicados.")
+
+                if filtro_probabilidad or filtro_sin_observaciones:
+                    with st.expander(f"📋 Ver listado completo de los {len(df_filtrado)} casos filtrados", expanded=True):
+                        columnas_resumen = [
+                            'Número de caso', 'Nickname', 'División', 'Ajustador senior',
+                            'Probabilidad cierre 2026', 'Observaciones'
+                        ]
+                        columnas_resumen = [c for c in columnas_resumen if c in df_filtrado.columns]
+                        st.dataframe(df_filtrado[columnas_resumen].fillna(''), hide_index=True, use_container_width=True)
 
                 df_filtrado['_num_caso_int'] = pd.to_numeric(
                     df_filtrado['Número de caso'].astype(str).str.replace(r'\.0$', '', regex=True),
