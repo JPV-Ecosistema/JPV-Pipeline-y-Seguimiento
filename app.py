@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
@@ -95,6 +95,64 @@ def cargar_reporte_desde_nube():
         except Exception:
             pass
     return None, None
+
+def cargar_historial_desde_nube():
+    """Recupera el último respaldo del pipeline (hoja Pipeline_Backup) para usarlo como Pipeline Anterior."""
+    client = get_google_client()
+    if client:
+        try:
+            doc = client.open_by_url(st.secrets["google_sheet_url"])
+            ws = doc.worksheet("Pipeline_Backup")
+            metadata = ws.row_values(1)
+            if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+                fecha_str = metadata[1]
+                registros = ws.get_all_records(head=2)
+                df = pd.DataFrame(registros)
+                if not df.empty:
+                    return df, fecha_str
+        except Exception:
+            pass
+    return None, None
+
+def detectar_historial_desde_excel(archivo_historial):
+    """Detecta automáticamente la hoja más reciente del Pipeline Anterior (Excel maestro con varias hojas históricas)."""
+    xl_historial = pd.ExcelFile(archivo_historial)
+    hojas = xl_historial.sheet_names
+    hoja_maestra = None
+    fecha_reciente = datetime.min
+
+    for h in hojas:
+        match = re.search(r'(\d{2}-\d{2}-\d{2})', h)
+        if match:
+            try:
+                fecha_hoja = datetime.strptime(match.group(1), "%d-%m-%y")
+                if fecha_hoja > fecha_reciente:
+                    fecha_reciente = fecha_hoja
+                    hoja_maestra = h
+            except:
+                continue
+
+    if not hoja_maestra:
+        posibles_nombres = ['Número de caso', 'Numero de caso', 'N° caso', 'Caso']
+        for h in reversed(hojas):
+            df_check = pd.read_excel(xl_historial, sheet_name=h, nrows=10, header=None)
+            if any(str(val).strip() in posibles_nombres for row in df_check.values for val in row):
+                hoja_maestra = h
+                break
+
+    if not hoja_maestra:
+        return None, None
+
+    df_hist_raw = pd.read_excel(xl_historial, sheet_name=hoja_maestra, header=None)
+    fila_h = 0
+    for i, row in df_hist_raw.iterrows():
+        if any(str(val).strip() in ['Número de caso', 'Numero de caso', 'N° caso', 'Caso'] for val in row.values):
+            fila_h = i
+            break
+
+    df_hist = pd.read_excel(xl_historial, sheet_name=hoja_maestra, skiprows=fila_h)
+    df_hist.columns = [str(c).strip() for c in df_hist.columns]
+    return df_hist, hoja_maestra
 
 def normalizar_para_base_maestra(df):
     """Replica la normalización que usa el Planificador Semanal antes de guardar en Base_Maestra."""
@@ -191,12 +249,21 @@ if archivo_nuevo is not None:
     elif st.session_state.get("_ultimo_envio_base_maestra"):
         st.sidebar.caption(f"🔁 Sincronizado con Base_Maestra: {st.session_state['_ultimo_envio_base_maestra']}")
 
-archivo_historial = st.sidebar.file_uploader("2. Pipeline Anterior (Excel Maestro)", type=["xlsx"])
+df_hist_nube, fecha_hist_nube = cargar_historial_desde_nube()
+
+st.sidebar.subheader("2. Pipeline Anterior (histórico)")
+if df_hist_nube is not None:
+    st.sidebar.success(f"☁️ Usando el último respaldo del Pipeline (actualizado el {fecha_hist_nube}).")
+else:
+    st.sidebar.info("No se encontró un respaldo del Pipeline en la nube. Sube el Excel maestro manualmente.")
+archivo_historial = st.sidebar.file_uploader(
+    "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"], key="uploader_historial"
+)
 
 render_sidebar_respaldo()
 render_sidebar_version()
 
-if (df_nuevo_manual is not None or df_nube is not None) and archivo_historial:
+if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial is not None or df_hist_nube is not None):
     # 1. Cargar Reporte Nuevo (Títulos en fila 6). Prioridad: archivo subido manualmente > reporte compartido en la nube.
     if df_nuevo_manual is not None:
         df_nuevo = df_nuevo_manual.copy()
@@ -205,49 +272,23 @@ if (df_nuevo_manual is not None or df_nube is not None) and archivo_historial:
     df_nuevo.columns = [str(c).strip() for c in df_nuevo.columns]
     df_nuevo = df_nuevo.replace('', pd.NA).dropna(how='all', axis=0)
 
-    # 2. Identificar Automáticamente la Última Hoja por Fecha o Posición
-    xl_historial = pd.ExcelFile(archivo_historial)
-    hojas = xl_historial.sheet_names
-    hoja_maestra = None
-    fecha_reciente = datetime.min
-    
-    for h in hojas:
-        match = re.search(r'(\d{2}-\d{2}-\d{2})', h)
-        if match:
-            try:
-                fecha_hoja = datetime.strptime(match.group(1), "%d-%m-%y")
-                if fecha_hoja > fecha_reciente:
-                    fecha_reciente = fecha_hoja
-                    hoja_maestra = h
-            except:
-                continue
-    
-    if not hoja_maestra:
-        posibles_nombres = ['Número de caso', 'Numero de caso', 'N° caso', 'Caso']
-        for h in reversed(hojas):
-            df_check = pd.read_excel(xl_historial, sheet_name=h, nrows=10, header=None)
-            if any(str(val).strip() in posibles_nombres for row in df_check.values for val in row):
-                hoja_maestra = h
-                break
+    # 2. Obtener el Pipeline Anterior. Prioridad: archivo subido manualmente > último respaldo en la nube.
+    if archivo_historial is not None:
+        df_hist, hoja_maestra = detectar_historial_desde_excel(archivo_historial)
+    else:
+        df_hist = df_hist_nube.copy()
+        df_hist.columns = [str(c).strip() for c in df_hist.columns]
+        if 'Probabilidad cierre 2026' in df_hist.columns:
+            df_hist['Probabilidad cierre 2026'] = df_hist['Probabilidad cierre 2026'].astype(str).str.replace('%', '', regex=False)
+        hoja_maestra = f"Respaldo en la nube ({fecha_hist_nube})"
 
     if not hoja_maestra:
         st.error("No se pudo identificar la hoja de datos en el historial.")
     else:
         st.info(f"Última actualización detectada: **{hoja_maestra}**")
-        
-        # Leer historial detectando fila de encabezado
-        df_hist_raw = pd.read_excel(xl_historial, sheet_name=hoja_maestra, header=None)
-        fila_h = 0
-        for i, row in df_hist_raw.iterrows():
-            if any(str(val).strip() in ['Número de caso', 'Numero de caso', 'N° caso', 'Caso'] for val in row.values):
-                fila_h = i
-                break
-        
-        df_hist = pd.read_excel(xl_historial, sheet_name=hoja_maestra, skiprows=fila_h)
-        df_hist.columns = [str(c).strip() for c in df_hist.columns]
-        
+
         col_llave = next((c for c in df_nuevo.columns if c in ['Número de caso', 'Numero de caso', 'N° caso', 'Caso']), None)
-        
+
         if col_llave:
             # Estandarización de llaves (Texto)
             df_nuevo[col_llave] = df_nuevo[col_llave].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
