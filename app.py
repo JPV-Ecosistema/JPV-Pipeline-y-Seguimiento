@@ -8,6 +8,10 @@ import re
 import gspread
 from google.oauth2.service_account import Credentials
 
+# --- CONTROL DE VERSIONES ---
+# Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
+APP_VERSION = "1.2.0"
+
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
     "0%": "Nula",
@@ -102,6 +106,14 @@ def render_sidebar_respaldo():
     if not st.session_state.get("_ultimo_respaldo_nube") and not st.session_state.get("_ultimo_respaldo_error"):
         st.sidebar.info("Aún no se ha generado un respaldo en esta sesión.")
 
+def render_sidebar_version():
+    try:
+        fecha_revision = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        fecha_revision = "N/D"
+    st.sidebar.divider()
+    st.sidebar.caption(f"🧾 Versión {APP_VERSION} · Última revisión de la app: {fecha_revision}")
+
 # Columnas definitivas para el reporte de salida
 COLUMNAS_FINALES = [
     'Número de caso', 'Número de siniestro', 'Nickname', 'División', 
@@ -133,6 +145,7 @@ archivo_nuevo = st.sidebar.file_uploader(
 archivo_historial = st.sidebar.file_uploader("2. Pipeline Anterior (Excel Maestro)", type=["xlsx"])
 
 render_sidebar_respaldo()
+render_sidebar_version()
 
 if (archivo_nuevo is not None or df_nube is not None) and archivo_historial:
     # 1. Cargar Reporte Nuevo (Títulos en fila 6). Prioridad: archivo subido manualmente > reporte compartido en la nube.
