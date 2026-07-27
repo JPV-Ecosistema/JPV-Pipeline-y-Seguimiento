@@ -74,6 +74,24 @@ def guardar_respaldo_pipeline(df):
         else:
             st.session_state["_ultimo_respaldo_error"] = f"Hubo un detalle con el respaldo en nube: {cloud_error}"
 
+def cargar_reporte_desde_nube():
+    """Recupera el último 'Reporte de Acciones' (hoja Base_Maestra) subido desde el Planificador Semanal."""
+    client = get_google_client()
+    if client:
+        try:
+            doc = client.open_by_url(st.secrets["google_sheet_url"])
+            ws = doc.worksheet("Base_Maestra")
+            metadata = ws.row_values(1)
+            if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+                fecha_str = metadata[1]
+                registros = ws.get_all_records(head=2)
+                df = pd.DataFrame(registros)
+                if not df.empty:
+                    return df, fecha_str
+        except Exception:
+            pass
+    return None, None
+
 def render_sidebar_respaldo():
     st.sidebar.divider()
     st.sidebar.header("☁️ Respaldo en la Nube")
@@ -100,16 +118,30 @@ st.set_page_config(page_title="JPV Pipeline y Seguimiento", layout="wide")
 st.title("🚀 JPV: Pipeline de Facturación Probable")
 
 st.sidebar.header("Carga de Documentos")
-archivo_nuevo = st.sidebar.file_uploader("1. Nuevo Reporte de Acciones (Excel)", type=["xlsx"])
+
+df_nube, fecha_nube = cargar_reporte_desde_nube()
+
+st.sidebar.subheader("1. Reporte Nuevo de Acciones")
+if df_nube is not None:
+    st.sidebar.success(f"☁️ Usando el Reporte de Acciones compartido con el Planificador (actualizado el {fecha_nube}).")
+else:
+    st.sidebar.info("No se encontró un Reporte de Acciones en la nube. Sube uno manualmente.")
+archivo_nuevo = st.sidebar.file_uploader(
+    "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"]
+)
+
 archivo_historial = st.sidebar.file_uploader("2. Pipeline Anterior (Excel Maestro)", type=["xlsx"])
 
 render_sidebar_respaldo()
 
-if archivo_nuevo and archivo_historial:
-    # 1. Cargar Reporte Nuevo (Títulos en fila 6)
-    df_nuevo = pd.read_excel(archivo_nuevo, skiprows=5)
+if (archivo_nuevo is not None or df_nube is not None) and archivo_historial:
+    # 1. Cargar Reporte Nuevo (Títulos en fila 6). Prioridad: archivo subido manualmente > reporte compartido en la nube.
+    if archivo_nuevo is not None:
+        df_nuevo = pd.read_excel(archivo_nuevo, skiprows=5)
+    else:
+        df_nuevo = df_nube.copy()
     df_nuevo.columns = [str(c).strip() for c in df_nuevo.columns]
-    df_nuevo = df_nuevo.dropna(how='all', axis=0)
+    df_nuevo = df_nuevo.replace('', pd.NA).dropna(how='all', axis=0)
 
     # 2. Identificar Automáticamente la Última Hoja por Fecha o Posición
     xl_historial = pd.ExcelFile(archivo_historial)
