@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import io
 import os
 import json
@@ -10,7 +11,23 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.7.0"
+
+# --- ZONA HORARIA (Chile continental) ---
+ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
+
+def ahora_cl():
+    """Hora actual en Chile (naive, ya ajustada por CLT/CLST), sin depender de la zona horaria del servidor."""
+    return datetime.now(ZONA_HORARIA_CL).replace(tzinfo=None)
+
+def calcular_rangos_semana():
+    """Devuelve (inicio, fin) de la semana pasada y de esta semana (lunes a domingo), según la fecha actual en Chile."""
+    hoy = ahora_cl().date()
+    inicio_semana_actual = hoy - timedelta(days=hoy.weekday())
+    fin_semana_actual = inicio_semana_actual + timedelta(days=6)
+    inicio_semana_pasada = inicio_semana_actual - timedelta(days=7)
+    fin_semana_pasada = inicio_semana_actual - timedelta(days=1)
+    return inicio_semana_pasada, fin_semana_pasada, inicio_semana_actual, fin_semana_actual
 
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
@@ -51,7 +68,7 @@ def get_backup_sheet():
 def guardar_respaldo_pipeline(df):
     """Deja una copia local (JSON) y un respaldo en la nube (Google Sheets) del pipeline activo."""
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
-    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
     df_guardar = df.copy()
     df_guardar['Fecha probable de facturación'] = df_guardar['Fecha probable de facturación'].astype(str)
     datos_guardar = {"fecha": fecha_hoy, "data": df_guardar.fillna("").to_dict(orient="records")}
@@ -167,7 +184,7 @@ def normalizar_para_base_maestra(df):
 def guardar_reporte_en_nube(df_nuevo_crudo):
     """Sube el Reporte de Acciones cargado manualmente en el Pipeline de vuelta a Base_Maestra,
     para que el Planificador Semanal también quede sincronizado (sincronización bidireccional)."""
-    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
     df_norm = normalizar_para_base_maestra(df_nuevo_crudo)
     try:
         client = get_google_client()
@@ -202,7 +219,7 @@ def render_sidebar_respaldo():
 
 def render_sidebar_version():
     try:
-        fecha_revision = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime("%d/%m/%Y %H:%M")
+        fecha_revision = datetime.fromtimestamp(os.path.getmtime(__file__), tz=ZONA_HORARIA_CL).strftime("%d/%m/%Y %H:%M")
     except Exception:
         fecha_revision = "N/D"
     st.sidebar.divider()
@@ -400,6 +417,33 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                         cols_mostrar = [c for c in columnas_salientes if c in salientes_detectados.columns]
                         st.dataframe(salientes_detectados[cols_mostrar].fillna(''), hide_index=True)
 
+                st.markdown("---")
+                st.markdown("#### 🆕 Casos Nuevos por Fecha de Creación")
+
+                inicio_sp, fin_sp, inicio_se, fin_se = calcular_rangos_semana()
+
+                df_creacion = st.session_state['df_pipeline_activo'].copy()
+                df_creacion['_fecha_creado'] = pd.to_datetime(df_creacion['Creado en'], errors='coerce').dt.date
+
+                casos_semana_pasada = df_creacion[
+                    (df_creacion['_fecha_creado'] >= inicio_sp) & (df_creacion['_fecha_creado'] <= fin_sp)
+                ]
+                casos_esta_semana = df_creacion[
+                    (df_creacion['_fecha_creado'] >= inicio_se) & (df_creacion['_fecha_creado'] <= fin_se)
+                ]
+
+                columnas_nuevos = [c for c in [col_llave, 'Nickname', 'División', 'Ajustador senior', 'Creado en', 'Probabilidad cierre 2026'] if c in df_creacion.columns]
+
+                col_n1, col_n2 = st.columns(2)
+                with col_n1:
+                    st.info(f"📅 **Casos Nuevos Semana Pasada** ({inicio_sp.strftime('%d/%m')} al {fin_sp.strftime('%d/%m')}): **{len(casos_semana_pasada)} casos**.")
+                    with st.expander(f"Ver detalle ({len(casos_semana_pasada)} casos)"):
+                        st.dataframe(casos_semana_pasada[columnas_nuevos].fillna(''), hide_index=True, use_container_width=True)
+                with col_n2:
+                    st.success(f"📅 **Casos Nuevos Esta Semana** ({inicio_se.strftime('%d/%m')} al {fin_se.strftime('%d/%m')}): **{len(casos_esta_semana)} casos**.")
+                    with st.expander(f"Ver detalle ({len(casos_esta_semana)} casos)"):
+                        st.dataframe(casos_esta_semana[columnas_nuevos].fillna(''), hide_index=True, use_container_width=True)
+
                 def color_semaforo(val):
                     if val in ["75%", "100%"]:
                         return 'background-color: #c6efce; color: #006100;'
@@ -441,7 +485,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                 st.metric("FACTURACIÓN PROBABLE TOTAL (UF)", f"{df_editado['Hon Probables 2026'].sum():,.2f}")
 
-                fecha_desc = datetime.now().strftime("%d-%m-%y")
+                fecha_desc = ahora_cl().strftime("%d-%m-%y")
                 buffer = io.BytesIO()
                 df_excel = df_editado.copy()
                 df_excel['Probabilidad cierre 2026'] = df_excel['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
@@ -543,7 +587,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                         try:
                             fecha_creacion = pd.to_datetime(fila_caso.get('Creado en', ''), errors='coerce')
-                            dias_activo = (datetime.now() - fecha_creacion).days if pd.notna(fecha_creacion) else None
+                            dias_activo = (ahora_cl() - fecha_creacion).days if pd.notna(fecha_creacion) else None
                         except:
                             dias_activo = None
 
@@ -643,7 +687,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             if not nueva_obs.strip():
                                 st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
                             else:
-                                timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                                timestamp_ahora = ahora_cl().strftime("%d/%m/%Y %H:%M")
                                 obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
 
                                 hon_uf = float(fila_caso.get("Honorarios (UF)", 0) or 0)
