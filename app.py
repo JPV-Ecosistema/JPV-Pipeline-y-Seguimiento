@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import io
 import os
 import json
@@ -10,7 +11,14 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
+
+# --- ZONA HORARIA (Chile continental) ---
+ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
+
+def ahora_cl():
+    """Hora actual en Chile (naive, ya ajustada por CLT/CLST), sin depender de la zona horaria del servidor."""
+    return datetime.now(ZONA_HORARIA_CL).replace(tzinfo=None)
 
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
@@ -51,7 +59,7 @@ def get_backup_sheet():
 def guardar_respaldo_pipeline(df):
     """Deja una copia local (JSON) y un respaldo en la nube (Google Sheets) del pipeline activo."""
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
-    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
     df_guardar = df.copy()
     df_guardar['Fecha probable de facturación'] = df_guardar['Fecha probable de facturación'].astype(str)
     datos_guardar = {"fecha": fecha_hoy, "data": df_guardar.fillna("").to_dict(orient="records")}
@@ -167,7 +175,7 @@ def normalizar_para_base_maestra(df):
 def guardar_reporte_en_nube(df_nuevo_crudo):
     """Sube el Reporte de Acciones cargado manualmente en el Pipeline de vuelta a Base_Maestra,
     para que el Planificador Semanal también quede sincronizado (sincronización bidireccional)."""
-    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
     df_norm = normalizar_para_base_maestra(df_nuevo_crudo)
     try:
         client = get_google_client()
@@ -202,7 +210,7 @@ def render_sidebar_respaldo():
 
 def render_sidebar_version():
     try:
-        fecha_revision = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime("%d/%m/%Y %H:%M")
+        fecha_revision = datetime.fromtimestamp(os.path.getmtime(__file__), tz=ZONA_HORARIA_CL).strftime("%d/%m/%Y %H:%M")
     except Exception:
         fecha_revision = "N/D"
     st.sidebar.divider()
@@ -441,7 +449,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                 st.metric("FACTURACIÓN PROBABLE TOTAL (UF)", f"{df_editado['Hon Probables 2026'].sum():,.2f}")
 
-                fecha_desc = datetime.now().strftime("%d-%m-%y")
+                fecha_desc = ahora_cl().strftime("%d-%m-%y")
                 buffer = io.BytesIO()
                 df_excel = df_editado.copy()
                 df_excel['Probabilidad cierre 2026'] = df_excel['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
@@ -543,7 +551,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                         try:
                             fecha_creacion = pd.to_datetime(fila_caso.get('Creado en', ''), errors='coerce')
-                            dias_activo = (datetime.now() - fecha_creacion).days if pd.notna(fecha_creacion) else None
+                            dias_activo = (ahora_cl() - fecha_creacion).days if pd.notna(fecha_creacion) else None
                         except:
                             dias_activo = None
 
@@ -643,7 +651,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             if not nueva_obs.strip():
                                 st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
                             else:
-                                timestamp_ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                                timestamp_ahora = ahora_cl().strftime("%d/%m/%Y %H:%M")
                                 obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
 
                                 hon_uf = float(fila_caso.get("Honorarios (UF)", 0) or 0)
