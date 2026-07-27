@@ -2,7 +2,15 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import io
+import os
+import json
 import re
+import gspread
+from google.oauth2.service_account import Credentials
+
+# --- CONTROL DE VERSIONES ---
+# Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
+APP_VERSION = "1.2.0"
 
 # --- CONFIGURACIÓN DE ETIQUETAS ---
 PROB_MAP = {
@@ -12,6 +20,99 @@ PROB_MAP = {
     "75%": "Altamente probable",
     "100%": "Cierta"
 }
+
+# --- RESPALDO EN LA NUBE (Google Sheets vía cuenta de servicio) ---
+PERSISTENCE_DIR = "persistence"
+BACKUP_FILE = os.path.join(PERSISTENCE_DIR, "PIPELINE_BACKUP.json")
+
+def get_google_client():
+    try:
+        if "gcp_service_account" in st.secrets and "google_sheet_url" in st.secrets:
+            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+            return gspread.authorize(creds)
+    except Exception as e:
+        st.session_state["_ultimo_respaldo_error"] = f"Error crítico de conexión a Google Cloud: {e}"
+    return None
+
+def get_backup_sheet():
+    client = get_google_client()
+    if client:
+        try:
+            doc = client.open_by_url(st.secrets["google_sheet_url"])
+            try:
+                return doc.worksheet("Pipeline_Backup")
+            except Exception:
+                return doc.add_worksheet(title="Pipeline_Backup", rows="2000", cols="30")
+        except Exception as e:
+            st.session_state["_ultimo_respaldo_error"] = f"Error al abrir la hoja de respaldo: {e}"
+    return None
+
+def guardar_respaldo_pipeline(df):
+    """Deja una copia local (JSON) y un respaldo en la nube (Google Sheets) del pipeline activo."""
+    os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df_guardar = df.copy()
+    df_guardar['Fecha probable de facturación'] = df_guardar['Fecha probable de facturación'].astype(str)
+    datos_guardar = {"fecha": fecha_hoy, "data": df_guardar.fillna("").to_dict(orient="records")}
+
+    try:
+        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(datos_guardar, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+    try:
+        ws = get_backup_sheet()
+        if ws:
+            matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
+            matriz.append(df_guardar.columns.astype(str).tolist())
+            matriz.extend(df_guardar.fillna("").astype(str).values.tolist())
+            ws.clear()
+            ws.update("A1", matriz)
+            st.session_state["_ultimo_respaldo_nube"] = fecha_hoy
+            st.session_state["_ultimo_respaldo_error"] = None
+    except Exception as cloud_error:
+        if "429" in str(cloud_error):
+            st.session_state["_ultimo_respaldo_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). El respaldo local se guardó igualmente."
+        else:
+            st.session_state["_ultimo_respaldo_error"] = f"Hubo un detalle con el respaldo en nube: {cloud_error}"
+
+def cargar_reporte_desde_nube():
+    """Recupera el último 'Reporte de Acciones' (hoja Base_Maestra) subido desde el Planificador Semanal."""
+    client = get_google_client()
+    if client:
+        try:
+            doc = client.open_by_url(st.secrets["google_sheet_url"])
+            ws = doc.worksheet("Base_Maestra")
+            metadata = ws.row_values(1)
+            if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+                fecha_str = metadata[1]
+                registros = ws.get_all_records(head=2)
+                df = pd.DataFrame(registros)
+                if not df.empty:
+                    return df, fecha_str
+        except Exception:
+            pass
+    return None, None
+
+def render_sidebar_respaldo():
+    st.sidebar.divider()
+    st.sidebar.header("☁️ Respaldo en la Nube")
+    if st.session_state.get("_ultimo_respaldo_nube"):
+        st.sidebar.success(f"✅ Último respaldo: {st.session_state['_ultimo_respaldo_nube']}")
+    if st.session_state.get("_ultimo_respaldo_error"):
+        st.sidebar.warning(f"⚠️ {st.session_state['_ultimo_respaldo_error']}")
+    if not st.session_state.get("_ultimo_respaldo_nube") and not st.session_state.get("_ultimo_respaldo_error"):
+        st.sidebar.info("Aún no se ha generado un respaldo en esta sesión.")
+
+def render_sidebar_version():
+    try:
+        fecha_revision = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        fecha_revision = "N/D"
+    st.sidebar.divider()
+    st.sidebar.caption(f"🧾 Versión {APP_VERSION} · Última revisión de la app: {fecha_revision}")
 
 # Columnas definitivas para el reporte de salida
 COLUMNAS_FINALES = [
@@ -29,14 +130,31 @@ st.set_page_config(page_title="JPV Pipeline y Seguimiento", layout="wide")
 st.title("🚀 JPV: Pipeline de Facturación Probable")
 
 st.sidebar.header("Carga de Documentos")
-archivo_nuevo = st.sidebar.file_uploader("1. Nuevo Reporte de Acciones (Excel)", type=["xlsx"])
+
+df_nube, fecha_nube = cargar_reporte_desde_nube()
+
+st.sidebar.subheader("1. Reporte Nuevo de Acciones")
+if df_nube is not None:
+    st.sidebar.success(f"☁️ Usando el Reporte de Acciones compartido con el Planificador (actualizado el {fecha_nube}).")
+else:
+    st.sidebar.info("No se encontró un Reporte de Acciones en la nube. Sube uno manualmente.")
+archivo_nuevo = st.sidebar.file_uploader(
+    "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"]
+)
+
 archivo_historial = st.sidebar.file_uploader("2. Pipeline Anterior (Excel Maestro)", type=["xlsx"])
 
-if archivo_nuevo and archivo_historial:
-    # 1. Cargar Reporte Nuevo (Títulos en fila 6)
-    df_nuevo = pd.read_excel(archivo_nuevo, skiprows=5)
+render_sidebar_respaldo()
+render_sidebar_version()
+
+if (archivo_nuevo is not None or df_nube is not None) and archivo_historial:
+    # 1. Cargar Reporte Nuevo (Títulos en fila 6). Prioridad: archivo subido manualmente > reporte compartido en la nube.
+    if archivo_nuevo is not None:
+        df_nuevo = pd.read_excel(archivo_nuevo, skiprows=5)
+    else:
+        df_nuevo = df_nube.copy()
     df_nuevo.columns = [str(c).strip() for c in df_nuevo.columns]
-    df_nuevo = df_nuevo.dropna(how='all', axis=0)
+    df_nuevo = df_nuevo.replace('', pd.NA).dropna(how='all', axis=0)
 
     # 2. Identificar Automáticamente la Última Hoja por Fecha o Posición
     xl_historial = pd.ExcelFile(archivo_historial)
@@ -120,6 +238,7 @@ if archivo_nuevo and archivo_historial:
             # --- INICIALIZAR ESTADO COMPARTIDO ENTRE PESTAÑAS ---
             if 'df_pipeline_activo' not in st.session_state:
                 st.session_state['df_pipeline_activo'] = df_final.copy()
+                guardar_respaldo_pipeline(df_final)
 
             # --- BLOQUE DE FILTROS PARA PESTAÑA 2 ---
             st.markdown("---")
@@ -213,9 +332,11 @@ if archivo_nuevo and archivo_historial:
                 prob_num_final = df_editado['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
                 df_editado['Hon Probables 2026'] = df_editado['Honorarios (UF)'] * prob_num_final
                 df_editado['Indicación Probabilidad'] = df_editado['Probabilidad cierre 2026'].map(PROB_MAP)
-                
-                st.session_state['df_pipeline_activo'] = df_editado.copy()
-                
+
+                if not df_editado.equals(st.session_state['df_pipeline_activo']):
+                    st.session_state['df_pipeline_activo'] = df_editado.copy()
+                    guardar_respaldo_pipeline(df_editado)
+
                 st.metric("FACTURACIÓN PROBABLE TOTAL (UF)", f"{df_editado['Hon Probables 2026'].sum():,.2f}")
 
                 fecha_desc = datetime.now().strftime("%d-%m-%y")
@@ -421,6 +542,7 @@ if archivo_nuevo and archivo_historial:
                                 df_temp.loc[mask, "Hon Probables 2026"] = hon_probables_nuevo
 
                                 st.session_state["df_pipeline_activo"] = df_temp
+                                guardar_respaldo_pipeline(df_temp)
                                 st.session_state["_ultimo_guardado"] = f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}."
                                 st.rerun()
 
