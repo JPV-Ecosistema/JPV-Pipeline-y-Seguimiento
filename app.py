@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -65,19 +65,31 @@ def get_backup_sheet():
             st.session_state["_ultimo_respaldo_error"] = f"Error al abrir la hoja de respaldo: {e}"
     return None
 
-def guardar_respaldo_pipeline(df):
-    """Deja una copia local (JSON) y un respaldo en la nube (Google Sheets) del pipeline activo."""
+def guardar_local_pipeline(df):
+    """Guarda una copia local (JSON) del pipeline activo en esta instancia del servidor."""
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
     fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
     df_guardar = df.copy()
     df_guardar['Fecha probable de facturación'] = df_guardar['Fecha probable de facturación'].astype(str)
     datos_guardar = {"fecha": fecha_hoy, "data": df_guardar.fillna("").to_dict(orient="records")}
-
     try:
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(datos_guardar, f, ensure_ascii=False)
     except Exception:
         pass
+
+def guardar_respaldo_pipeline(df):
+    """Deja una copia local (JSON) y sobrescribe el respaldo completo en la nube (Google Sheets).
+
+    Usar solo para refrescos completos del pipeline (carga inicial o edición masiva en la
+    tabla del Tab 1): sobrescribe TODA la hoja Pipeline_Backup. Si dos usuarios tienen sesiones
+    abiertas al mismo tiempo, esto puede pisar cambios que otro usuario haya guardado en otros
+    casos mientras tanto. Para actualizar un único caso sin ese riesgo, usar guardar_caso_en_nube().
+    """
+    guardar_local_pipeline(df)
+    fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
+    df_guardar = df.copy()
+    df_guardar['Fecha probable de facturación'] = df_guardar['Fecha probable de facturación'].astype(str)
 
     try:
         ws = get_backup_sheet()
@@ -94,6 +106,49 @@ def guardar_respaldo_pipeline(df):
             st.session_state["_ultimo_respaldo_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). El respaldo local se guardó igualmente."
         else:
             st.session_state["_ultimo_respaldo_error"] = f"Hubo un detalle con el respaldo en nube: {cloud_error}"
+
+def guardar_caso_en_nube(fila_caso_actualizada, col_llave='Número de caso'):
+    """Actualiza en Pipeline_Backup solo la fila del caso editado (upsert por número de caso),
+    sin sobrescribir el resto de la hoja. Así, si dos ajustadores guardan seguimientos de casos
+    distintos al mismo tiempo, no se pisan los cambios entre sí."""
+    fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        ws = get_backup_sheet()
+        if not ws:
+            return
+        valores = ws.get_all_values()
+        if len(valores) < 2:
+            return
+        headers = valores[1]
+        filas_datos = valores[2:]
+
+        if col_llave not in headers:
+            return
+        idx_col_llave = headers.index(col_llave)
+        caso_valor = str(fila_caso_actualizada.get(col_llave, "")).strip()
+        fila_nueva = [str(fila_caso_actualizada.get(h, "")) for h in headers]
+
+        fila_encontrada = None
+        for i, fila in enumerate(filas_datos):
+            valor_actual = fila[idx_col_llave] if idx_col_llave < len(fila) else ""
+            if str(valor_actual).strip() == caso_valor:
+                fila_encontrada = i
+                break
+
+        if fila_encontrada is not None:
+            num_fila_hoja = fila_encontrada + 3  # fila 1: metadata, fila 2: encabezados, datos desde fila 3
+            ws.update(f"A{num_fila_hoja}", [fila_nueva])
+        else:
+            ws.append_row(fila_nueva)
+
+        ws.update("B1", [[fecha_hoy]])
+        st.session_state["_ultimo_respaldo_nube"] = fecha_hoy
+        st.session_state["_ultimo_respaldo_error"] = None
+    except Exception as cloud_error:
+        if "429" in str(cloud_error):
+            st.session_state["_ultimo_respaldo_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). El cambio local se guardó igualmente."
+        else:
+            st.session_state["_ultimo_respaldo_error"] = f"Hubo un detalle al sincronizar el caso con la nube: {cloud_error}"
 
 def cargar_reporte_desde_nube():
     """Recupera el último 'Reporte de Acciones' (hoja Base_Maestra) subido desde el Planificador Semanal."""
@@ -707,7 +762,11 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                 df_temp.loc[mask, "Hon Probables 2026"] = hon_probables_nuevo
 
                                 st.session_state["df_pipeline_activo"] = df_temp
-                                guardar_respaldo_pipeline(df_temp)
+
+                                guardar_local_pipeline(df_temp)
+                                fila_actualizada = df_temp.loc[mask].fillna("").astype(str).iloc[0].to_dict()
+                                guardar_caso_en_nube(fila_actualizada)
+
                                 st.session_state["_ultimo_guardado"] = f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}."
                                 st.rerun()
 
