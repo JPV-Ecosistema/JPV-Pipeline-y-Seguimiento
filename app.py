@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -784,33 +784,43 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             if not nueva_obs.strip():
                                 st.error("⚠️ La observación es obligatoria. Por favor completa el campo antes de guardar.")
                             else:
-                                timestamp_ahora = ahora_cl().strftime("%d/%m/%Y %H:%M")
-                                obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
+                                try:
+                                    timestamp_ahora = ahora_cl().strftime("%d/%m/%Y %H:%M")
+                                    obs_con_fecha = f"[{timestamp_ahora}] {nueva_obs.strip()}"
 
-                                hon_uf = float(fila_caso.get("Honorarios (UF)", 0) or 0)
-                                prob_decimal = float(nueva_prob.replace("%", "")) / 100
-                                hon_probables_nuevo = hon_uf * prob_decimal
+                                    hon_uf = float(fila_caso.get("Honorarios (UF)", 0) or 0)
+                                    prob_decimal = float(nueva_prob.replace("%", "")) / 100
+                                    hon_probables_nuevo = hon_uf * prob_decimal
 
-                                fecha_str = nueva_fecha.strftime("%Y-%m-%d") if nueva_fecha else ""
+                                    fecha_str = nueva_fecha.strftime("%Y-%m-%d") if nueva_fecha else ""
 
-                                df_temp = st.session_state["df_pipeline_activo"].copy()
-                                df_temp["Fecha probable de facturación"] = df_temp["Fecha probable de facturación"].astype(str).replace("NaT", "").replace("None", "")
+                                    df_temp = st.session_state["df_pipeline_activo"].copy()
+                                    df_temp["Fecha probable de facturación"] = df_temp["Fecha probable de facturación"].astype(str).replace("NaT", "").replace("None", "")
 
-                                mask = df_temp["Número de caso"].astype(str) == caso_seleccionado
-                                df_temp.loc[mask, "Observaciones"] = obs_con_fecha
-                                df_temp.loc[mask, "Fecha probable de facturación"] = fecha_str
-                                df_temp.loc[mask, "Probabilidad cierre 2026"] = nueva_prob
-                                df_temp.loc[mask, "Indicación Probabilidad"] = PROB_MAP.get(nueva_prob, "")
-                                df_temp.loc[mask, "Hon Probables 2026"] = hon_probables_nuevo
+                                    mask = df_temp["Número de caso"].astype(str) == caso_seleccionado
+                                    if not mask.any():
+                                        st.error(f"⚠️ No se encontró el caso {caso_seleccionado} en el pipeline activo. Intenta recargar la app.")
+                                    else:
+                                        df_temp.loc[mask, "Observaciones"] = obs_con_fecha
+                                        df_temp.loc[mask, "Fecha probable de facturación"] = fecha_str
+                                        df_temp.loc[mask, "Probabilidad cierre 2026"] = nueva_prob
+                                        df_temp.loc[mask, "Indicación Probabilidad"] = PROB_MAP.get(nueva_prob, "")
+                                        df_temp.loc[mask, "Hon Probables 2026"] = hon_probables_nuevo
 
-                                st.session_state["df_pipeline_activo"] = df_temp
+                                        st.session_state["df_pipeline_activo"] = df_temp
 
-                                guardar_local_pipeline(df_temp)
-                                fila_actualizada = df_temp.loc[mask].fillna("").astype(str).iloc[0].to_dict()
-                                guardar_caso_en_nube(fila_actualizada)
+                                        guardar_local_pipeline(df_temp)
+                                        fila_actualizada = df_temp.loc[mask].fillna("").astype(str).iloc[0].to_dict()
 
-                                st.session_state["_ultimo_guardado"] = f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}."
-                                st.rerun()
+                                        try:
+                                            guardar_caso_en_nube(fila_actualizada)
+                                        except Exception as error_nube:
+                                            st.session_state["_ultimo_respaldo_error"] = f"El caso se guardó localmente pero no se pudo sincronizar con la nube: {error_nube}"
+
+                                        st.session_state["_ultimo_guardado"] = f"✅ Caso **{caso_seleccionado}** actualizado correctamente el {timestamp_ahora}."
+                                        st.rerun()
+                                except Exception as error_guardado:
+                                    st.error(f"❌ Ocurrió un error al guardar el seguimiento: {error_guardado}")
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
