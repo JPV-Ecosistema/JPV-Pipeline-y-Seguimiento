@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.13.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -316,6 +316,15 @@ st.title("🚀 JPV: Pipeline de Facturación Probable")
 st.sidebar.header("Carga de Documentos")
 
 df_nube, fecha_nube = cargar_reporte_desde_nube()
+if df_nube is not None:
+    st.session_state["_df_nube_cache"] = df_nube
+    st.session_state["_fecha_nube_cache"] = fecha_nube
+elif "_df_nube_cache" in st.session_state:
+    # La lectura en vivo falló en este rerun (ej. cuota de Google momentáneamente excedida).
+    # Se reutiliza la última copia que sí se pudo leer en esta sesión, para no tirar abajo
+    # toda la app (pestañas, filtros) por una falla transitoria en la nube.
+    df_nube = st.session_state["_df_nube_cache"]
+    fecha_nube = st.session_state["_fecha_nube_cache"]
 
 st.sidebar.subheader("1. Reporte Nuevo de Acciones")
 if df_nube is not None:
@@ -342,6 +351,14 @@ if archivo_nuevo is not None:
         st.sidebar.caption(f"🔁 Sincronizado con Base_Maestra: {st.session_state['_ultimo_envio_base_maestra']}")
 
 df_hist_nube, fecha_hist_nube = cargar_historial_desde_nube()
+if df_hist_nube is not None:
+    st.session_state["_df_hist_nube_cache"] = df_hist_nube
+    st.session_state["_fecha_hist_nube_cache"] = fecha_hist_nube
+elif "_df_hist_nube_cache" in st.session_state:
+    # Mismo motivo que con el reporte: evitar que una falla transitoria de lectura tire
+    # abajo toda la app cuando ya tenemos una copia buena de esta sesión.
+    df_hist_nube = st.session_state["_df_hist_nube_cache"]
+    fecha_hist_nube = st.session_state["_fecha_hist_nube_cache"]
 
 st.sidebar.subheader("2. Pipeline Anterior (histórico)")
 if df_hist_nube is not None:
