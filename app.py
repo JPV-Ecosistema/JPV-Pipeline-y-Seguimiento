@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -331,6 +331,26 @@ else:
 archivo_historial = st.sidebar.file_uploader(
     "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"], key="uploader_historial"
 )
+
+if archivo_historial is not None:
+    st.sidebar.warning("⚠️ Esto reemplazará por completo el histórico en la nube (Pipeline_Backup). Úsalo solo en casos excepcionales.")
+    password_historial = st.sidebar.text_input(
+        "Contraseña para autorizar el reemplazo del histórico:",
+        type="password",
+        key="password_historial"
+    )
+    password_correcta = st.secrets.get("password_historial_manual")
+    if not password_correcta:
+        st.sidebar.error("⚠️ No hay contraseña configurada en los secrets de la app (password_historial_manual). Se ignorará el archivo.")
+        archivo_historial = None
+    elif not password_historial:
+        st.sidebar.info("Ingresa la contraseña para habilitar este archivo. Mientras tanto se usará el respaldo en la nube.")
+        archivo_historial = None
+    elif password_historial != password_correcta:
+        st.sidebar.error("❌ Contraseña incorrecta. Se ignorará el archivo subido y se usará el respaldo en la nube.")
+        archivo_historial = None
+    else:
+        st.sidebar.success("✅ Contraseña correcta. Se usará el archivo subido en vez del respaldo en la nube.")
 
 render_sidebar_respaldo()
 render_sidebar_version()
