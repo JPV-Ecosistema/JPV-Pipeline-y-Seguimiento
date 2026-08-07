@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -101,6 +101,7 @@ def guardar_respaldo_pipeline(df):
             ws.update("A1", matriz)
             st.session_state["_ultimo_respaldo_nube"] = fecha_hoy
             st.session_state["_ultimo_respaldo_error"] = None
+            cargar_historial_desde_nube.clear()
     except Exception as cloud_error:
         if "429" in str(cloud_error):
             st.session_state["_ultimo_respaldo_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). El respaldo local se guardó igualmente."
@@ -144,14 +145,21 @@ def guardar_caso_en_nube(fila_caso_actualizada, col_llave='Número de caso'):
         ws.update("B1", [[fecha_hoy]])
         st.session_state["_ultimo_respaldo_nube"] = fecha_hoy
         st.session_state["_ultimo_respaldo_error"] = None
+        cargar_historial_desde_nube.clear()
     except Exception as cloud_error:
         if "429" in str(cloud_error):
             st.session_state["_ultimo_respaldo_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). El cambio local se guardó igualmente."
         else:
             st.session_state["_ultimo_respaldo_error"] = f"Hubo un detalle al sincronizar el caso con la nube: {cloud_error}"
 
+@st.cache_data(ttl=60, show_spinner=False)
 def cargar_reporte_desde_nube():
-    """Recupera el último 'Reporte de Acciones' (hoja Base_Maestra) subido desde el Planificador Semanal."""
+    """Recupera el último 'Reporte de Acciones' (hoja Base_Maestra) subido desde el Planificador Semanal.
+
+    Se cachea 60 segundos (compartido entre todas las sesiones de este servidor) para no
+    golpear la cuota de la API de Google Sheets en cada rerun de Streamlit, que ocurre en
+    cada clic, filtro o edición.
+    """
     client = get_google_client()
     if client:
         try:
@@ -164,12 +172,19 @@ def cargar_reporte_desde_nube():
                 df = pd.DataFrame(registros)
                 if not df.empty:
                     return df, fecha_str
-        except Exception:
-            pass
+        except Exception as e:
+            st.session_state["_ultimo_error_lectura_reporte"] = str(e)
+            return None, None
+    st.session_state["_ultimo_error_lectura_reporte"] = None
     return None, None
 
+@st.cache_data(ttl=60, show_spinner=False)
 def cargar_historial_desde_nube():
-    """Recupera el último respaldo del pipeline (hoja Pipeline_Backup) para usarlo como Pipeline Anterior."""
+    """Recupera el último respaldo del pipeline (hoja Pipeline_Backup) para usarlo como Pipeline Anterior.
+
+    Se cachea 60 segundos (compartido entre todas las sesiones de este servidor) por el mismo
+    motivo que cargar_reporte_desde_nube(): evitar exceder la cuota de la API en cada rerun.
+    """
     client = get_google_client()
     if client:
         try:
@@ -182,8 +197,10 @@ def cargar_historial_desde_nube():
                 df = pd.DataFrame(registros)
                 if not df.empty:
                     return df, fecha_str
-        except Exception:
-            pass
+        except Exception as e:
+            st.session_state["_ultimo_error_lectura_historial"] = str(e)
+            return None, None
+    st.session_state["_ultimo_error_lectura_historial"] = None
     return None, None
 
 def detectar_historial_desde_excel(archivo_historial):
@@ -256,6 +273,7 @@ def guardar_reporte_en_nube(df_nuevo_crudo):
             ws.update("A1", matriz)
             st.session_state["_ultimo_envio_base_maestra"] = fecha_hoy
             st.session_state["_ultimo_envio_base_maestra_error"] = None
+            cargar_reporte_desde_nube.clear()
     except Exception as cloud_error:
         if "429" in str(cloud_error):
             st.session_state["_ultimo_envio_base_maestra_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). Se reintentará más adelante."
@@ -304,6 +322,8 @@ if df_nube is not None:
     st.sidebar.success(f"☁️ Usando el Reporte de Acciones compartido con el Planificador (actualizado el {fecha_nube}).")
 else:
     st.sidebar.info("No se encontró un Reporte de Acciones en la nube. Sube uno manualmente.")
+    if st.session_state.get("_ultimo_error_lectura_reporte"):
+        st.sidebar.caption(f"Detalle: {st.session_state['_ultimo_error_lectura_reporte']}")
 archivo_nuevo = st.sidebar.file_uploader(
     "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"]
 )
@@ -328,6 +348,8 @@ if df_hist_nube is not None:
     st.sidebar.success(f"☁️ Usando el último respaldo del Pipeline (actualizado el {fecha_hist_nube}).")
 else:
     st.sidebar.info("No se encontró un respaldo del Pipeline en la nube. Sube el Excel maestro manualmente.")
+    if st.session_state.get("_ultimo_error_lectura_historial"):
+        st.sidebar.caption(f"Detalle: {st.session_state['_ultimo_error_lectura_historial']}")
 archivo_historial = st.sidebar.file_uploader(
     "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"], key="uploader_historial"
 )
