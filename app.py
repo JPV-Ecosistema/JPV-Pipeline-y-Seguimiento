@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -465,12 +465,12 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             st.markdown("---")
 
             # --- PESTAÑAS PRINCIPALES ---
-            tab1, tab2 = st.tabs(["📋 Pipeline General", "🔍 Seguimiento de Caso"])
+            tab_seguimiento, tab_pipeline = st.tabs(["🔍 Seguimiento de Caso", "📋 Pipeline General"])
 
             # ==========================================
-            # PESTAÑA 1 — PIPELINE GENERAL (SIN CAMBIOS)
+            # PESTAÑA PIPELINE GENERAL (SIN CAMBIOS)
             # ==========================================
-            with tab1:
+            with tab_pipeline:
 
                 st.subheader("Panel de Gestión Semanal")
                 
@@ -593,9 +593,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                 )
 
             # ==========================================
-            # PESTAÑA 2 — SEGUIMIENTO DE CASO (CON FILTROS)
+            # PESTAÑA SEGUIMIENTO DE CASO (CON FILTROS)
             # ==========================================
-            with tab2:
+            with tab_seguimiento:
                 st.subheader("🔍 Seguimiento Individual de Caso")
 
                 df_filtrado = st.session_state['df_pipeline_activo'].copy()
