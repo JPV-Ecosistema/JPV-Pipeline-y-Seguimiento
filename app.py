@@ -6,12 +6,28 @@ import io
 import os
 import json
 import re
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.15.0"
+
+def con_reintento(func, intentos=3, espera_inicial=1.5):
+    """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
+    Con varios ajustadores guardando casos a la vez es común chocar momentáneamente con la
+    cuota de la API de Sheets; un par de reintentos cortos suele bastar para que pase solo."""
+    espera = espera_inicial
+    for intento in range(intentos):
+        try:
+            return func()
+        except Exception as e:
+            if "429" in str(e) and intento < intentos - 1:
+                time.sleep(espera)
+                espera *= 2
+                continue
+            raise
 
 # --- ZONA HORARIA (Chile continental) ---
 ZONA_HORARIA_CL = ZoneInfo("America/Santiago")
@@ -58,8 +74,8 @@ def get_backup_sheet():
         try:
             doc = client.open_by_url(st.secrets["google_sheet_url"])
             try:
-                return doc.worksheet("Pipeline_Backup")
-            except Exception:
+                return con_reintento(lambda: doc.worksheet("Pipeline_Backup"))
+            except gspread.exceptions.WorksheetNotFound:
                 return doc.add_worksheet(title="Pipeline_Backup", rows="2000", cols="30")
         except Exception as e:
             st.session_state["_ultimo_respaldo_error"] = f"Error al abrir la hoja de respaldo: {e}"
@@ -97,8 +113,8 @@ def guardar_respaldo_pipeline(df):
             matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
             matriz.append(df_guardar.columns.astype(str).tolist())
             matriz.extend(df_guardar.fillna("").astype(str).values.tolist())
-            ws.clear()
-            ws.update("A1", matriz)
+            con_reintento(lambda: ws.clear())
+            con_reintento(lambda: ws.update("A1", matriz))
             st.session_state["_ultimo_respaldo_nube"] = fecha_hoy
             st.session_state["_ultimo_respaldo_error"] = None
             cargar_historial_desde_nube.clear()
@@ -111,13 +127,18 @@ def guardar_respaldo_pipeline(df):
 def guardar_caso_en_nube(fila_caso_actualizada, col_llave='Número de caso'):
     """Actualiza en Pipeline_Backup solo la fila del caso editado (upsert por número de caso),
     sin sobrescribir el resto de la hoja. Así, si dos ajustadores guardan seguimientos de casos
-    distintos al mismo tiempo, no se pisan los cambios entre sí."""
+    distintos al mismo tiempo, no se pisan los cambios entre sí.
+
+    Optimizado para consumir la menor cantidad posible de peticiones a la API de Google Sheets
+    (cuota compartida entre todos los ajustadores, ya que usan la misma cuenta de servicio):
+    la fila del caso y la fecha de actualización se escriben en una sola llamada cuando el caso
+    ya existe, y cada llamada a Google reintenta sola si choca con la cuota (429)."""
     fecha_hoy = ahora_cl().strftime("%Y-%m-%d %H:%M:%S")
     try:
         ws = get_backup_sheet()
         if not ws:
             return
-        valores = ws.get_all_values()
+        valores = con_reintento(lambda: ws.get_all_values())
         if len(valores) < 2:
             return
         headers = valores[1]
@@ -138,14 +159,17 @@ def guardar_caso_en_nube(fila_caso_actualizada, col_llave='Número de caso'):
 
         if fila_encontrada is not None:
             num_fila_hoja = fila_encontrada + 3  # fila 1: metadata, fila 2: encabezados, datos desde fila 3
-            ws.update(f"A{num_fila_hoja}", [fila_nueva])
+            # Una sola petición para la fila del caso y la fecha de actualización.
+            con_reintento(lambda: ws.batch_update([
+                {"range": f"A{num_fila_hoja}", "values": [fila_nueva]},
+                {"range": "B1", "values": [[fecha_hoy]]},
+            ]))
         else:
-            ws.append_row(fila_nueva)
+            con_reintento(lambda: ws.append_row(fila_nueva))
+            con_reintento(lambda: ws.update("B1", [[fecha_hoy]]))
 
-        ws.update("B1", [[fecha_hoy]])
         st.session_state["_ultimo_respaldo_nube"] = fecha_hoy
         st.session_state["_ultimo_respaldo_error"] = None
-        cargar_historial_desde_nube.clear()
     except Exception as cloud_error:
         if "429" in str(cloud_error):
             st.session_state["_ultimo_respaldo_error"] = "Google Cloud está en pausa (Límite 429 de peticiones). El cambio local se guardó igualmente."
@@ -163,12 +187,15 @@ def cargar_reporte_desde_nube():
     client = get_google_client()
     if client:
         try:
-            doc = client.open_by_url(st.secrets["google_sheet_url"])
-            ws = doc.worksheet("Base_Maestra")
-            metadata = ws.row_values(1)
-            if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+            def _leer():
+                doc = client.open_by_url(st.secrets["google_sheet_url"])
+                ws = doc.worksheet("Base_Maestra")
+                metadata = ws.row_values(1)
+                registros = ws.get_all_records(head=2) if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION" else None
+                return metadata, registros
+            metadata, registros = con_reintento(_leer)
+            if registros is not None:
                 fecha_str = metadata[1]
-                registros = ws.get_all_records(head=2)
                 df = pd.DataFrame(registros)
                 if not df.empty:
                     return df, fecha_str
@@ -188,12 +215,15 @@ def cargar_historial_desde_nube():
     client = get_google_client()
     if client:
         try:
-            doc = client.open_by_url(st.secrets["google_sheet_url"])
-            ws = doc.worksheet("Pipeline_Backup")
-            metadata = ws.row_values(1)
-            if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+            def _leer():
+                doc = client.open_by_url(st.secrets["google_sheet_url"])
+                ws = doc.worksheet("Pipeline_Backup")
+                metadata = ws.row_values(1)
+                registros = ws.get_all_records(head=2) if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION" else None
+                return metadata, registros
+            metadata, registros = con_reintento(_leer)
+            if registros is not None:
                 fecha_str = metadata[1]
-                registros = ws.get_all_records(head=2)
                 df = pd.DataFrame(registros)
                 if not df.empty:
                     return df, fecha_str
@@ -263,14 +293,14 @@ def guardar_reporte_en_nube(df_nuevo_crudo):
         if client:
             doc = client.open_by_url(st.secrets["google_sheet_url"])
             try:
-                ws = doc.worksheet("Base_Maestra")
-            except Exception:
+                ws = con_reintento(lambda: doc.worksheet("Base_Maestra"))
+            except gspread.exceptions.WorksheetNotFound:
                 ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
             matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
             matriz.append(df_norm.columns.astype(str).tolist())
             matriz.extend(df_norm.values.tolist())
-            ws.clear()
-            ws.update("A1", matriz)
+            con_reintento(lambda: ws.clear())
+            con_reintento(lambda: ws.update("A1", matriz))
             st.session_state["_ultimo_envio_base_maestra"] = fecha_hoy
             st.session_state["_ultimo_envio_base_maestra_error"] = None
             cargar_reporte_desde_nube.clear()
@@ -371,6 +401,7 @@ archivo_historial = st.sidebar.file_uploader(
     "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"], key="uploader_historial"
 )
 
+historial_manual_autorizado_nuevo = False
 if archivo_historial is not None:
     st.sidebar.warning("⚠️ Esto reemplazará por completo el histórico en la nube (Pipeline_Backup). Úsalo solo en casos excepcionales.")
     password_historial = st.sidebar.text_input(
@@ -390,6 +421,11 @@ if archivo_historial is not None:
         archivo_historial = None
     else:
         st.sidebar.success("✅ Contraseña correcta. Se usará el archivo subido en vez del respaldo en la nube.")
+        firma_historial_manual = f"{archivo_historial.name}_{archivo_historial.size}"
+        historial_manual_autorizado_nuevo = st.session_state.get("_ultima_firma_historial_manual") != firma_historial_manual
+        st.session_state["_ultima_firma_historial_manual"] = firma_historial_manual
+        if historial_manual_autorizado_nuevo:
+            st.sidebar.caption("🔁 Este archivo reemplazará el pipeline activo y el respaldo en la nube.")
 
 render_sidebar_respaldo()
 render_sidebar_version()
@@ -457,7 +493,10 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             df_final = df_final[COLUMNAS_FINALES]
 
             # --- INICIALIZAR ESTADO COMPARTIDO ENTRE PESTAÑAS ---
-            if 'df_pipeline_activo' not in st.session_state:
+            # Se reemplaza el pipeline activo si es la primera carga de la sesión, o si se acaba
+            # de autorizar (con contraseña) un nuevo archivo manual de Pipeline Anterior: en ese
+            # caso debe reemplazar el pipeline en curso y el respaldo en la nube, no ser ignorado.
+            if 'df_pipeline_activo' not in st.session_state or historial_manual_autorizado_nuevo:
                 st.session_state['df_pipeline_activo'] = df_final.copy()
                 guardar_respaldo_pipeline(df_final)
 
