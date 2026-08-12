@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.14.0"
+APP_VERSION = "1.15.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -401,6 +401,7 @@ archivo_historial = st.sidebar.file_uploader(
     "Cargar manualmente (opcional, reemplaza el de la nube)", type=["xlsx"], key="uploader_historial"
 )
 
+historial_manual_autorizado_nuevo = False
 if archivo_historial is not None:
     st.sidebar.warning("⚠️ Esto reemplazará por completo el histórico en la nube (Pipeline_Backup). Úsalo solo en casos excepcionales.")
     password_historial = st.sidebar.text_input(
@@ -420,6 +421,11 @@ if archivo_historial is not None:
         archivo_historial = None
     else:
         st.sidebar.success("✅ Contraseña correcta. Se usará el archivo subido en vez del respaldo en la nube.")
+        firma_historial_manual = f"{archivo_historial.name}_{archivo_historial.size}"
+        historial_manual_autorizado_nuevo = st.session_state.get("_ultima_firma_historial_manual") != firma_historial_manual
+        st.session_state["_ultima_firma_historial_manual"] = firma_historial_manual
+        if historial_manual_autorizado_nuevo:
+            st.sidebar.caption("🔁 Este archivo reemplazará el pipeline activo y el respaldo en la nube.")
 
 render_sidebar_respaldo()
 render_sidebar_version()
@@ -487,7 +493,10 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             df_final = df_final[COLUMNAS_FINALES]
 
             # --- INICIALIZAR ESTADO COMPARTIDO ENTRE PESTAÑAS ---
-            if 'df_pipeline_activo' not in st.session_state:
+            # Se reemplaza el pipeline activo si es la primera carga de la sesión, o si se acaba
+            # de autorizar (con contraseña) un nuevo archivo manual de Pipeline Anterior: en ese
+            # caso debe reemplazar el pipeline en curso y el respaldo en la nube, no ser ignorado.
+            if 'df_pipeline_activo' not in st.session_state or historial_manual_autorizado_nuevo:
                 st.session_state['df_pipeline_activo'] = df_final.copy()
                 guardar_respaldo_pipeline(df_final)
 
