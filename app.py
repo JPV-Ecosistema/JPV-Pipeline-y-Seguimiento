@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.17.0"
+APP_VERSION = "1.17.1"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -922,6 +922,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                     st.session_state["masiva_ajustador_aplicado"] = "Todos"
                 if "masiva_pagina" not in st.session_state:
                     st.session_state["masiva_pagina"] = 0
+                if "masiva_epoch" not in st.session_state:
+                    st.session_state["masiva_epoch"] = 0
+                epoch_masivo = st.session_state["masiva_epoch"]
 
                 def calcular_casos_filtrados_masivo():
                     df_f = df_base_masivo.copy()
@@ -957,9 +960,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                     caso_m = str(fila_m['Número de caso'])
                     prob_base_m = str(fila_m.get('Probabilidad cierre 2026', '0%'))
                     fecha_base_m = fecha_base_str_masivo(fila_m.get('Fecha probable de facturación', None))
-                    prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}", prob_base_m)
-                    obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}", "")
-                    fecha_widget_m = st.session_state.get(f"masiva_fecha_{caso_m}", None)
+                    prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}_{epoch_masivo}", prob_base_m)
+                    obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}_{epoch_masivo}", "")
+                    fecha_widget_m = st.session_state.get(f"masiva_fecha_{caso_m}_{epoch_masivo}", None)
                     fecha_actual_m = fecha_widget_m.strftime("%Y-%m-%d") if fecha_widget_m else ""
                     if prob_actual_m != prob_base_m or obs_actual_m.strip() != "" or fecha_actual_m != fecha_base_m:
                         casos_con_cambios_masivo.append(caso_m)
@@ -1074,10 +1077,10 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             st.markdown(f"<div style='text-align:center; font-size:22px; font-weight:700;'>{dias_activo_m if dias_activo_m is not None else '—'}</div><div style='text-align:center; font-size:11px; color:#98a2b3;'>DÍAS</div>", unsafe_allow_html=True)
                         with col_c3:
                             st.selectbox(
-                                f"{semaforo_emoji_masivo(st.session_state.get(f'masiva_prob_{caso_m}', prob_base_m))} Probabilidad 2026",
+                                f"{semaforo_emoji_masivo(st.session_state.get(f'masiva_prob_{caso_m}_{epoch_masivo}', prob_base_m))} Probabilidad 2026",
                                 options=OPCIONES_PROB_MASIVA,
                                 index=OPCIONES_PROB_MASIVA.index(prob_base_m),
-                                key=f"masiva_prob_{caso_m}"
+                                key=f"masiva_prob_{caso_m}_{epoch_masivo}"
                             )
                         with col_c4:
                             if obs_referencia_m:
@@ -1086,14 +1089,14 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                 st.caption("🕐 Sin observaciones previas registradas.")
                             st.text_input(
                                 "Observación (obligatoria si cambia la probabilidad)",
-                                key=f"masiva_obs_{caso_m}",
+                                key=f"masiva_obs_{caso_m}_{epoch_masivo}",
                                 placeholder="Escribe una nueva observación..."
                             )
                         with col_c5:
                             st.date_input(
                                 "Fecha probable",
                                 value=fecha_base_valor_m,
-                                key=f"masiva_fecha_{caso_m}"
+                                key=f"masiva_fecha_{caso_m}_{epoch_masivo}"
                             )
 
                 if total_casos_masivo > 0:
@@ -1116,22 +1119,18 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                         )
 
                     if click_descartar_masivo:
-                        for _, fila_m in casos_pagina_masiva.iterrows():
-                            caso_m = str(fila_m['Número de caso'])
-                            prob_base_m = str(fila_m.get('Probabilidad cierre 2026', '0%'))
-                            if prob_base_m not in OPCIONES_PROB_MASIVA:
-                                prob_base_m = "0%"
-                            fecha_base_dt_m = pd.to_datetime(fila_m.get('Fecha probable de facturación', None), errors='coerce')
-                            st.session_state[f"masiva_prob_{caso_m}"] = prob_base_m
-                            st.session_state[f"masiva_obs_{caso_m}"] = ""
-                            st.session_state[f"masiva_fecha_{caso_m}"] = fecha_base_dt_m.date() if pd.notna(fecha_base_dt_m) else None
+                        # No se puede reasignar el session_state de un widget ya instanciado en
+                        # este mismo run (Streamlit lo prohíbe). En vez de eso, se incrementa la
+                        # "época": los widgets de la próxima ejecución usarán claves nuevas y
+                        # partirán limpios desde los valores base del pipeline.
+                        st.session_state["masiva_epoch"] += 1
                         st.rerun()
 
                     if click_guardar_masivo:
                         errores_validacion_masivo = []
                         for caso_m in casos_con_cambios_masivo:
-                            prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}")
-                            obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}", "")
+                            prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}_{epoch_masivo}")
+                            obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}_{epoch_masivo}", "")
                             fila_original_m = casos_pagina_masiva[casos_pagina_masiva['Número de caso'].astype(str) == caso_m].iloc[0]
                             prob_base_m = str(fila_original_m.get('Probabilidad cierre 2026', '0%'))
                             if prob_actual_m != prob_base_m and not obs_actual_m.strip():
@@ -1150,9 +1149,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                     if not mask_m.any():
                                         continue
 
-                                    nueva_prob_m = st.session_state.get(f"masiva_prob_{caso_m}")
-                                    nueva_obs_m = st.session_state.get(f"masiva_obs_{caso_m}", "").strip()
-                                    nueva_fecha_m = st.session_state.get(f"masiva_fecha_{caso_m}")
+                                    nueva_prob_m = st.session_state.get(f"masiva_prob_{caso_m}_{epoch_masivo}")
+                                    nueva_obs_m = st.session_state.get(f"masiva_obs_{caso_m}_{epoch_masivo}", "").strip()
+                                    nueva_fecha_m = st.session_state.get(f"masiva_fecha_{caso_m}_{epoch_masivo}")
                                     fecha_str_m = nueva_fecha_m.strftime("%Y-%m-%d") if nueva_fecha_m else ""
 
                                     hon_uf_m = float(df_temp_masivo.loc[mask_m, "Honorarios (UF)"].iloc[0] or 0)
@@ -1180,8 +1179,11 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                     except Exception as error_nube_m:
                                         errores_sync_masivo.append(f"{caso_m} ({error_nube_m})")
 
-                                for caso_m in casos_con_cambios_masivo:
-                                    st.session_state.pop(f"masiva_obs_{caso_m}", None)
+                                # Igual que en "Descartar cambios": no se puede tocar el session_state
+                                # de un widget ya instanciado en este run, así que se incrementa la
+                                # época para que la próxima ejecución parta limpia desde el nuevo
+                                # pipeline ya guardado (sin cambios pendientes).
+                                st.session_state["masiva_epoch"] += 1
 
                                 if errores_sync_masivo:
                                     st.session_state["_ultimo_respaldo_error"] = f"Guardado localmente, pero no se pudo sincronizar con la nube: {', '.join(errores_sync_masivo)}"
