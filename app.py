@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.15.0"
+APP_VERSION = "1.16.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -543,7 +543,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             st.markdown("---")
 
             # --- PESTAÑAS PRINCIPALES ---
-            tab_seguimiento, tab_pipeline = st.tabs(["🔍 Seguimiento de Caso", "📋 Pipeline General"])
+            tab_seguimiento, tab_pipeline, tab_masiva = st.tabs(
+                ["🔍 Seguimiento de Caso", "📋 Pipeline General", "📝 Actualización Masiva"]
+            )
 
             # ==========================================
             # PESTAÑA PIPELINE GENERAL (SIN CAMBIOS)
@@ -877,6 +879,297 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                         st.rerun()
                                 except Exception as error_guardado:
                                     st.error(f"❌ Ocurrió un error al guardar el seguimiento: {error_guardado}")
+
+            # ==========================================
+            # PESTAÑA ACTUALIZACIÓN MASIVA
+            # ==========================================
+            with tab_masiva:
+                st.subheader("📝 Actualización Masiva de Casos")
+                st.caption("Revisa y actualiza varios casos a la vez, en bloques de 10.")
+
+                TAMANO_PAGINA_MASIVA = 10
+                OPCIONES_PROB_MASIVA = ["0%", "25%", "50%", "75%", "100%"]
+
+                def semaforo_emoji_masivo(prob):
+                    if prob in ["75%", "100%"]:
+                        return "🟢"
+                    elif prob == "50%":
+                        return "🟡"
+                    return "🔴"
+
+                df_base_masivo = st.session_state['df_pipeline_activo']
+
+                if "masiva_division_aplicada" not in st.session_state:
+                    st.session_state["masiva_division_aplicada"] = "Todas"
+                if "masiva_ajustador_aplicado" not in st.session_state:
+                    st.session_state["masiva_ajustador_aplicado"] = "Todos"
+                if "masiva_pagina" not in st.session_state:
+                    st.session_state["masiva_pagina"] = 0
+
+                def calcular_casos_filtrados_masivo():
+                    df_f = df_base_masivo.copy()
+                    div_aplicada = st.session_state["masiva_division_aplicada"]
+                    aj_aplicado = st.session_state["masiva_ajustador_aplicado"]
+                    if div_aplicada != "Todas":
+                        df_f = df_f[df_f['División'].astype(str).str.strip() == div_aplicada]
+                    if aj_aplicado != "Todos":
+                        df_f = df_f[df_f['Ajustador senior'].astype(str).str.strip() == aj_aplicado]
+                    df_f = df_f.copy()
+                    df_f['_num_caso_int'] = pd.to_numeric(
+                        df_f['Número de caso'].astype(str).str.replace(r'\.0$', '', regex=True), errors='coerce'
+                    )
+                    return df_f.sort_values('_num_caso_int', ascending=True)
+
+                casos_filtrados_masivo = calcular_casos_filtrados_masivo()
+                total_casos_masivo = len(casos_filtrados_masivo)
+                total_paginas_masivo = max(1, -(-total_casos_masivo // TAMANO_PAGINA_MASIVA))
+                if st.session_state["masiva_pagina"] > total_paginas_masivo - 1:
+                    st.session_state["masiva_pagina"] = total_paginas_masivo - 1
+                pagina_actual_masiva = st.session_state["masiva_pagina"]
+                inicio_masivo = pagina_actual_masiva * TAMANO_PAGINA_MASIVA
+                fin_masivo = min(inicio_masivo + TAMANO_PAGINA_MASIVA, total_casos_masivo)
+                casos_pagina_masiva = casos_filtrados_masivo.iloc[inicio_masivo:fin_masivo]
+
+                def fecha_base_str_masivo(valor_fecha):
+                    fecha_dt = pd.to_datetime(valor_fecha, errors='coerce')
+                    return fecha_dt.strftime("%Y-%m-%d") if pd.notna(fecha_dt) else ""
+
+                # --- Detectar cambios sin guardar en la página actualmente visible ---
+                casos_con_cambios_masivo = []
+                for _, fila_m in casos_pagina_masiva.iterrows():
+                    caso_m = str(fila_m['Número de caso'])
+                    prob_base_m = str(fila_m.get('Probabilidad cierre 2026', '0%'))
+                    fecha_base_m = fecha_base_str_masivo(fila_m.get('Fecha probable de facturación', None))
+                    prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}", prob_base_m)
+                    obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}", "")
+                    fecha_widget_m = st.session_state.get(f"masiva_fecha_{caso_m}", None)
+                    fecha_actual_m = fecha_widget_m.strftime("%Y-%m-%d") if fecha_widget_m else ""
+                    if prob_actual_m != prob_base_m or obs_actual_m.strip() != "" or fecha_actual_m != fecha_base_m:
+                        casos_con_cambios_masivo.append(caso_m)
+
+                hay_cambios_pendientes_masivo = len(casos_con_cambios_masivo) > 0
+
+                # --- Filtros (con botón "Aplicar filtros") ---
+                divisiones_disp_masivo = sorted(
+                    df_base_masivo['División'].dropna().astype(str).str.strip()
+                    .replace('', pd.NA).dropna().unique().tolist()
+                )
+                ajustadores_disp_masivo = sorted(
+                    df_base_masivo['Ajustador senior'].dropna().astype(str).str.strip()
+                    .replace('', pd.NA).dropna().unique().tolist()
+                )
+
+                col_fm1, col_fm2, col_fm3 = st.columns([2, 2, 1])
+                with col_fm1:
+                    division_pendiente_masiva = st.selectbox(
+                        "División", options=["Todas"] + divisiones_disp_masivo,
+                        index=(["Todas"] + divisiones_disp_masivo).index(st.session_state["masiva_division_aplicada"])
+                        if st.session_state["masiva_division_aplicada"] in (["Todas"] + divisiones_disp_masivo) else 0,
+                        key="masiva_division_pendiente"
+                    )
+                with col_fm2:
+                    ajustador_pendiente_masivo = st.selectbox(
+                        "Ajustador Senior", options=["Todos"] + ajustadores_disp_masivo,
+                        index=(["Todos"] + ajustadores_disp_masivo).index(st.session_state["masiva_ajustador_aplicado"])
+                        if st.session_state["masiva_ajustador_aplicado"] in (["Todos"] + ajustadores_disp_masivo) else 0,
+                        key="masiva_ajustador_pendiente"
+                    )
+                with col_fm3:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    click_aplicar_masivo = st.button("Aplicar filtros", key="masiva_aplicar_filtros")
+
+                if click_aplicar_masivo:
+                    if hay_cambios_pendientes_masivo:
+                        st.warning(f"⚠️ Tienes {len(casos_con_cambios_masivo)} caso(s) con cambios sin guardar en esta página. Guarda o descarta los cambios antes de aplicar otro filtro.")
+                    else:
+                        st.session_state["masiva_division_aplicada"] = division_pendiente_masiva
+                        st.session_state["masiva_ajustador_aplicado"] = ajustador_pendiente_masiva
+                        st.session_state["masiva_pagina"] = 0
+                        st.rerun()
+
+                st.markdown("---")
+
+                # --- Paginación ---
+                col_pm1, col_pm2 = st.columns([2, 1])
+                with col_pm1:
+                    if total_casos_masivo > 0:
+                        st.markdown(f"**Mostrando casos {inicio_masivo + 1}–{fin_masivo} de {total_casos_masivo}**")
+                    else:
+                        st.markdown("**No hay casos que coincidan con los filtros seleccionados.**")
+                with col_pm2:
+                    col_pant, col_psig = st.columns(2)
+                    with col_pant:
+                        click_anterior_masivo = st.button(
+                            "⬅ Anterior", key="masiva_pagina_anterior",
+                            disabled=(pagina_actual_masiva <= 0), use_container_width=True
+                        )
+                    with col_psig:
+                        click_siguiente_masivo = st.button(
+                            "Siguiente ➡", key="masiva_pagina_siguiente",
+                            disabled=(pagina_actual_masiva >= total_paginas_masivo - 1), use_container_width=True
+                        )
+
+                if click_anterior_masivo or click_siguiente_masivo:
+                    if hay_cambios_pendientes_masivo:
+                        st.warning(f"⚠️ Tienes {len(casos_con_cambios_masivo)} caso(s) con cambios sin guardar en esta página. Guarda o descarta los cambios antes de cambiar de página.")
+                    else:
+                        st.session_state["masiva_pagina"] += -1 if click_anterior_masivo else 1
+                        st.rerun()
+
+                st.caption("🟢 Alta · 🟡 Media · 🔴 Baja probabilidad — 🔵 Cambios sin guardar")
+
+                # --- Tarjetas de casos ---
+                for _, fila_m in casos_pagina_masiva.iterrows():
+                    caso_m = str(fila_m['Número de caso'])
+                    prob_base_m = str(fila_m.get('Probabilidad cierre 2026', '0%'))
+                    if prob_base_m not in OPCIONES_PROB_MASIVA:
+                        prob_base_m = "0%"
+                    obs_referencia_m = str(fila_m.get('Observaciones', '') or '').strip()
+                    fecha_base_dt_m = pd.to_datetime(fila_m.get('Fecha probable de facturación', None), errors='coerce')
+                    fecha_base_valor_m = fecha_base_dt_m.date() if pd.notna(fecha_base_dt_m) else None
+
+                    try:
+                        fecha_creacion_m = pd.to_datetime(fila_m.get('Creado en', ''), errors='coerce')
+                        dias_activo_m = (ahora_cl() - fecha_creacion_m).days if pd.notna(fecha_creacion_m) else None
+                    except Exception:
+                        dias_activo_m = None
+
+                    con_cambios_m = caso_m in casos_con_cambios_masivo
+
+                    with st.container(border=True):
+                        if con_cambios_m:
+                            st.markdown("🔵 **Cambios sin guardar**")
+
+                        col_c1, col_c2, col_c3, col_c4, col_c5 = st.columns([2, 0.8, 1.6, 3, 1.6])
+                        with col_c1:
+                            st.markdown(f"**{caso_m}**")
+                            st.caption(str(fila_m.get('Asegurado', '')))
+                            st.caption(str(fila_m.get('Corredora', '')))
+                        with col_c2:
+                            st.markdown(f"<div style='text-align:center; font-size:22px; font-weight:700;'>{dias_activo_m if dias_activo_m is not None else '—'}</div><div style='text-align:center; font-size:11px; color:#98a2b3;'>DÍAS</div>", unsafe_allow_html=True)
+                        with col_c3:
+                            st.selectbox(
+                                f"{semaforo_emoji_masivo(st.session_state.get(f'masiva_prob_{caso_m}', prob_base_m))} Probabilidad 2026",
+                                options=OPCIONES_PROB_MASIVA,
+                                index=OPCIONES_PROB_MASIVA.index(prob_base_m),
+                                key=f"masiva_prob_{caso_m}"
+                            )
+                        with col_c4:
+                            if obs_referencia_m:
+                                st.caption(f"🕐 Última gestión: {obs_referencia_m}")
+                            else:
+                                st.caption("🕐 Sin observaciones previas registradas.")
+                            st.text_input(
+                                "Observación (obligatoria si cambia la probabilidad)",
+                                key=f"masiva_obs_{caso_m}",
+                                placeholder="Escribe una nueva observación..."
+                            )
+                        with col_c5:
+                            st.date_input(
+                                "Fecha probable",
+                                value=fecha_base_valor_m,
+                                key=f"masiva_fecha_{caso_m}"
+                            )
+
+                if total_casos_masivo > 0:
+                    st.markdown("---")
+                    col_bm1, col_bm2, col_bm3 = st.columns([2.5, 1, 1.5])
+                    with col_bm1:
+                        if hay_cambios_pendientes_masivo:
+                            st.markdown(f"🔵 **{len(casos_con_cambios_masivo)} de {len(casos_pagina_masiva)} casos con cambios sin guardar**")
+                        else:
+                            st.caption("Sin cambios pendientes en esta página.")
+                    with col_bm2:
+                        click_descartar_masivo = st.button(
+                            "Descartar cambios", key="masiva_descartar", disabled=not hay_cambios_pendientes_masivo
+                        )
+                    with col_bm3:
+                        click_guardar_masivo = st.button(
+                            "💾 Guardar los 10 casos" if len(casos_pagina_masiva) == TAMANO_PAGINA_MASIVA else f"💾 Guardar los {len(casos_pagina_masiva)} casos",
+                            key="masiva_guardar", type="primary", disabled=not hay_cambios_pendientes_masivo,
+                            use_container_width=True
+                        )
+
+                    if click_descartar_masivo:
+                        for _, fila_m in casos_pagina_masiva.iterrows():
+                            caso_m = str(fila_m['Número de caso'])
+                            prob_base_m = str(fila_m.get('Probabilidad cierre 2026', '0%'))
+                            if prob_base_m not in OPCIONES_PROB_MASIVA:
+                                prob_base_m = "0%"
+                            fecha_base_dt_m = pd.to_datetime(fila_m.get('Fecha probable de facturación', None), errors='coerce')
+                            st.session_state[f"masiva_prob_{caso_m}"] = prob_base_m
+                            st.session_state[f"masiva_obs_{caso_m}"] = ""
+                            st.session_state[f"masiva_fecha_{caso_m}"] = fecha_base_dt_m.date() if pd.notna(fecha_base_dt_m) else None
+                        st.rerun()
+
+                    if click_guardar_masivo:
+                        errores_validacion_masivo = []
+                        for caso_m in casos_con_cambios_masivo:
+                            prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}")
+                            obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}", "")
+                            fila_original_m = casos_pagina_masiva[casos_pagina_masiva['Número de caso'].astype(str) == caso_m].iloc[0]
+                            prob_base_m = str(fila_original_m.get('Probabilidad cierre 2026', '0%'))
+                            if prob_actual_m != prob_base_m and not obs_actual_m.strip():
+                                errores_validacion_masivo.append(caso_m)
+
+                        if errores_validacion_masivo:
+                            st.error(f"⚠️ Estos casos cambiaron de probabilidad y necesitan una observación antes de guardar: {', '.join(errores_validacion_masivo)}")
+                        else:
+                            try:
+                                timestamp_masivo = ahora_cl().strftime("%d/%m/%Y %H:%M")
+                                df_temp_masivo = st.session_state["df_pipeline_activo"].copy()
+                                df_temp_masivo["Fecha probable de facturación"] = df_temp_masivo["Fecha probable de facturación"].astype(str).replace("NaT", "").replace("None", "")
+
+                                for caso_m in casos_con_cambios_masivo:
+                                    mask_m = df_temp_masivo["Número de caso"].astype(str) == caso_m
+                                    if not mask_m.any():
+                                        continue
+
+                                    nueva_prob_m = st.session_state.get(f"masiva_prob_{caso_m}")
+                                    nueva_obs_m = st.session_state.get(f"masiva_obs_{caso_m}", "").strip()
+                                    nueva_fecha_m = st.session_state.get(f"masiva_fecha_{caso_m}")
+                                    fecha_str_m = nueva_fecha_m.strftime("%Y-%m-%d") if nueva_fecha_m else ""
+
+                                    hon_uf_m = float(df_temp_masivo.loc[mask_m, "Honorarios (UF)"].iloc[0] or 0)
+                                    prob_decimal_m = float(nueva_prob_m.replace("%", "")) / 100
+                                    hon_probables_m = hon_uf_m * prob_decimal_m
+
+                                    df_temp_masivo.loc[mask_m, "Probabilidad cierre 2026"] = nueva_prob_m
+                                    df_temp_masivo.loc[mask_m, "Indicación Probabilidad"] = PROB_MAP.get(nueva_prob_m, "")
+                                    df_temp_masivo.loc[mask_m, "Fecha probable de facturación"] = fecha_str_m
+                                    df_temp_masivo.loc[mask_m, "Hon Probables 2026"] = hon_probables_m
+                                    if nueva_obs_m:
+                                        df_temp_masivo.loc[mask_m, "Observaciones"] = f"[{timestamp_masivo}] {nueva_obs_m}"
+
+                                st.session_state["df_pipeline_activo"] = df_temp_masivo
+                                guardar_local_pipeline(df_temp_masivo)
+
+                                errores_sync_masivo = []
+                                for caso_m in casos_con_cambios_masivo:
+                                    mask_m = df_temp_masivo["Número de caso"].astype(str) == caso_m
+                                    if not mask_m.any():
+                                        continue
+                                    fila_actualizada_m = df_temp_masivo.loc[mask_m].fillna("").astype(str).iloc[0].to_dict()
+                                    try:
+                                        guardar_caso_en_nube(fila_actualizada_m)
+                                    except Exception as error_nube_m:
+                                        errores_sync_masivo.append(caso_m)
+
+                                for caso_m in casos_con_cambios_masivo:
+                                    st.session_state.pop(f"masiva_obs_{caso_m}", None)
+
+                                if errores_sync_masivo:
+                                    st.session_state["_ultimo_respaldo_error"] = f"Guardado localmente, pero no se pudo sincronizar con la nube: {', '.join(errores_sync_masivo)}"
+
+                                st.session_state["_masiva_ultimo_guardado"] = f"{len(casos_con_cambios_masivo)} casos actualizados correctamente"
+                                st.session_state["_masiva_ultimo_guardado_hora"] = timestamp_masivo
+                                st.rerun()
+                            except Exception as error_guardado_masivo:
+                                st.error(f"❌ Ocurrió un error al guardar los casos: {error_guardado_masivo}")
+
+                if st.session_state.get("_masiva_ultimo_guardado"):
+                    st.toast(f"✅ {st.session_state['_masiva_ultimo_guardado']} · {st.session_state.get('_masiva_ultimo_guardado_hora', '')}", icon="✅")
+                    st.session_state["_masiva_ultimo_guardado"] = None
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
