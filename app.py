@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.16.1"
+APP_VERSION = "1.17.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -340,6 +340,35 @@ COLUMNAS_FINALES = [
     'Fecha probable de facturación'
 ]
 
+def generar_excel_pipeline(df):
+    """Genera un Excel formateado (con semáforo de color según probabilidad) a partir de un
+    DataFrame de casos. Reordena/selecciona siempre las columnas de COLUMNAS_FINALES, sin
+    importar qué columnas auxiliares traiga el DataFrame de entrada. Devuelve (bytes, fecha)."""
+    fecha_desc = ahora_cl().strftime("%d-%m-%y")
+    buffer = io.BytesIO()
+    df_excel = df[COLUMNAS_FINALES].copy()
+    df_excel['Probabilidad cierre 2026'] = df_excel['Probabilidad cierre 2026'].astype(str).str.replace('%', '').astype(float) / 100
+
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        nombre_hoja_descarga = f"Casos {fecha_desc}"
+        df_excel.to_excel(writer, sheet_name=nombre_hoja_descarga, index=False)
+        workbook = writer.book
+        worksheet = writer.sheets[nombre_hoja_descarga]
+        formato_pct = workbook.add_format({'num_format': '0%'})
+        formato_verde = workbook.add_format({'bg_color': '#c6efce', 'font_color': '#006100'})
+        formato_amarillo = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c5700'})
+        formato_rojo = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
+        idx_prob = COLUMNAS_FINALES.index('Probabilidad cierre 2026')
+        worksheet.set_column(idx_prob, idx_prob, 15, formato_pct)
+        filas_totales = len(df_excel)
+        worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob,
+                                     {'type': 'cell', 'criteria': '>=', 'value': 0.75, 'format': formato_verde})
+        worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob,
+                                     {'type': 'cell', 'criteria': '==', 'value': 0.50, 'format': formato_amarillo})
+        worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob,
+                                     {'type': 'cell', 'criteria': '<=', 'value': 0.25, 'format': formato_rojo})
+    return buffer.getvalue(), fecha_desc
+
 st.set_page_config(page_title="JPV Pipeline y Seguimiento", layout="wide")
 st.title("🚀 JPV: Pipeline de Facturación Probable")
 
@@ -640,34 +669,12 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                 st.metric("FACTURACIÓN PROBABLE TOTAL (UF)", f"{df_editado['Hon Probables 2026'].sum():,.2f}")
 
-                fecha_desc = ahora_cl().strftime("%d-%m-%y")
-                buffer = io.BytesIO()
-                df_excel = df_editado.copy()
-                df_excel['Probabilidad cierre 2026'] = df_excel['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
+                excel_bytes_pipeline, fecha_desc = generar_excel_pipeline(df_editado)
 
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    nombre_hoja_descarga = f"Casos {fecha_desc}"
-                    df_excel.to_excel(writer, sheet_name=nombre_hoja_descarga, index=False)
-                    workbook = writer.book
-                    worksheet = writer.sheets[nombre_hoja_descarga]
-                    formato_pct = workbook.add_format({'num_format': '0%'})
-                    formato_verde = workbook.add_format({'bg_color': '#c6efce', 'font_color': '#006100'})
-                    formato_amarillo = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c5700'})
-                    formato_rojo = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
-                    idx_prob = COLUMNAS_FINALES.index('Probabilidad cierre 2026')
-                    worksheet.set_column(idx_prob, idx_prob, 15, formato_pct)
-                    filas_totales = len(df_excel)
-                    worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob, 
-                                                 {'type': 'cell', 'criteria': '>=', 'value': 0.75, 'format': formato_verde})
-                    worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob, 
-                                                 {'type': 'cell', 'criteria': '==', 'value': 0.50, 'format': formato_amarillo})
-                    worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob, 
-                                                 {'type': 'cell', 'criteria': '<=', 'value': 0.25, 'format': formato_rojo})
-                
                 st.sidebar.divider()
                 st.sidebar.download_button(
                     label="📥 Descargar Pipeline Formateado",
-                    data=buffer.getvalue(),
+                    data=excel_bytes_pipeline,
                     file_name=f"JPV_Pipeline_{fecha_desc}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
@@ -701,6 +708,16 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                     ]
 
                 st.caption(f"Mostrando **{len(df_filtrado)}** casos según los filtros aplicados.")
+
+                if len(df_filtrado) > 0:
+                    excel_bytes_resumen, fecha_resumen = generar_excel_pipeline(df_filtrado)
+                    st.download_button(
+                        label=f"📥 Descargar resumen de estos {len(df_filtrado)} casos",
+                        data=excel_bytes_resumen,
+                        file_name=f"JPV_Resumen_Casos_{fecha_resumen}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="descargar_resumen_seguimiento"
+                    )
 
                 if filtro_probabilidad or filtro_sin_observaciones:
                     with st.expander(f"📋 Ver listado completo de los {len(df_filtrado)} casos filtrados", expanded=True):
@@ -994,6 +1011,14 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                 with col_pm1:
                     if total_casos_masivo > 0:
                         st.markdown(f"**Mostrando casos {inicio_masivo + 1}–{fin_masivo} de {total_casos_masivo}**")
+                        excel_bytes_masivo, fecha_resumen_masivo = generar_excel_pipeline(casos_filtrados_masivo)
+                        st.download_button(
+                            label=f"📥 Descargar resumen de los {total_casos_masivo} casos filtrados",
+                            data=excel_bytes_masivo,
+                            file_name=f"JPV_Resumen_Casos_{fecha_resumen_masivo}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="descargar_resumen_masiva"
+                        )
                     else:
                         st.markdown("**No hay casos que coincidan con los filtros seleccionados.**")
                 with col_pm2:
