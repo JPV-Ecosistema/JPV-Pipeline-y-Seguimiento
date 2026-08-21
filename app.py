@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.16.0"
+APP_VERSION = "1.16.1"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -968,7 +968,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                         key="masiva_division_pendiente"
                     )
                 with col_fm2:
-                    ajustador_pendiente_masivo = st.selectbox(
+                    ajustador_pendiente_masiva = st.selectbox(
                         "Ajustador Senior", options=["Todos"] + ajustadores_disp_masivo,
                         index=(["Todos"] + ajustadores_disp_masivo).index(st.session_state["masiva_ajustador_aplicado"])
                         if st.session_state["masiva_ajustador_aplicado"] in (["Todos"] + ajustadores_disp_masivo) else 0,
@@ -1153,7 +1153,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                     try:
                                         guardar_caso_en_nube(fila_actualizada_m)
                                     except Exception as error_nube_m:
-                                        errores_sync_masivo.append(caso_m)
+                                        errores_sync_masivo.append(f"{caso_m} ({error_nube_m})")
 
                                 for caso_m in casos_con_cambios_masivo:
                                     st.session_state.pop(f"masiva_obs_{caso_m}", None)
