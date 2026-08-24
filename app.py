@@ -7,12 +7,13 @@ import os
 import json
 import re
 import time
+import uuid
 import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.17.1"
+APP_VERSION = "1.18.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -369,6 +370,136 @@ def generar_excel_pipeline(df):
                                      {'type': 'cell', 'criteria': '<=', 'value': 0.25, 'format': formato_rojo})
     return buffer.getvalue(), fecha_desc
 
+# ---------------------------------------------------------
+# LÍNEA BASE FORECAST — motor de cálculo (Fase 1)
+# ---------------------------------------------------------
+FORECAST_ANIO = 2026
+FORECAST_META_DEFAULT = 39400
+MESES_NOMBRE = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+                "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+def clasificar_division_forecast(division):
+    return 'IE' if 'Ingeniería' in str(division) else 'EM'
+
+def es_engie_ctm_forecast(nickname):
+    keywords = ['CTM', 'Wally', 'Engie', 'Mejillones']
+    texto = str(nickname).lower()
+    return any(k.lower() in texto for k in keywords)
+
+def calcular_corte_forecast(usar_mes_anterior=False):
+    """Determina el mes de corte (último mes completo cerrado) y arma la etiqueta N+M."""
+    mes_actual = ahora_cl().month
+    mes_corte = mes_actual - 1
+    if usar_mes_anterior:
+        mes_corte -= 1
+
+    bloqueado = False
+    aviso = None
+    if mes_corte <= 0:
+        bloqueado = True
+        aviso = "No hay meses completos disponibles. El análisis se habilitará desde febrero."
+    elif mes_corte > 12:
+        bloqueado = True
+        aviso = "Mes de corte inválido."
+    else:
+        meses_proyectados_chk = 12 - mes_corte
+        if meses_proyectados_chk <= 0:
+            bloqueado = True
+            aviso = "No quedan meses por proyectar este año."
+        elif mes_corte == 11:
+            aviso = "La proyección es de un solo mes (diciembre)."
+
+    meses_reales = mes_corte if not bloqueado else 0
+    meses_proyectados = (12 - mes_corte) if not bloqueado else 0
+    label = f"{meses_reales}+{meses_proyectados}" if not bloqueado else "—"
+
+    if usar_mes_anterior and not bloqueado:
+        aviso = f"⚠️ Emitiendo forecast {label} con datos hasta {MESES_NOMBRE[mes_corte]}."
+
+    return {
+        'mes_corte': mes_corte,
+        'meses_reales': meses_reales,
+        'meses_proyectados': meses_proyectados,
+        'label': label,
+        'bloqueado': bloqueado,
+        'aviso': aviso,
+        'nombre_mes_corte': MESES_NOMBRE[mes_corte] if 1 <= mes_corte <= 12 else '—',
+    }
+
+def cargar_reporte_produccion_forecast(archivo, anio):
+    """Lee la hoja 'Casos' del Reporte de Producción (Faro), header en fila 6."""
+    df = pd.read_excel(archivo, sheet_name='Casos', skiprows=5)
+    df.columns = [str(c).strip() for c in df.columns]
+    df['Fecha factura'] = pd.to_datetime(df['Fecha factura'], errors='coerce')
+    df['Honorarios (UF)'] = pd.to_numeric(df['Honorarios (UF)'], errors='coerce')
+    df = df[df['Fecha factura'].notna() & (df['Honorarios (UF)'] > 0)].copy()
+    df['_anio'] = df['Fecha factura'].dt.year
+    df['_mes'] = df['Fecha factura'].dt.month
+    df['_div'] = df['División'].apply(clasificar_division_forecast)
+    if 'Indemnización neta' in df.columns:
+        df['Indemnización neta'] = pd.to_numeric(df['Indemnización neta'], errors='coerce').fillna(0)
+    else:
+        df['Indemnización neta'] = 0
+    return df
+
+def calcular_ytd_forecast(df_reporte, anio, mes_corte):
+    df_ytd = df_reporte[(df_reporte['_anio'] == anio) & (df_reporte['_mes'] <= mes_corte)].copy()
+    em_ytd = df_ytd[df_ytd['_div'] == 'EM']['Honorarios (UF)'].sum()
+    ie_ytd = df_ytd[df_ytd['_div'] == 'IE']['Honorarios (UF)'].sum()
+    mensual = df_ytd.groupby(['_mes', '_div'])['Honorarios (UF)'].sum().unstack(fill_value=0)
+    return em_ytd, ie_ytd, mensual, df_ytd
+
+def calcular_proyeccion_em_forecast(mensual, meses_proyectados, df_pipeline):
+    meses_disponibles = sorted(mensual.index) if 'EM' in mensual.columns else []
+    ultimos_3 = meses_disponibles[-3:]
+    valores_3m = [mensual.loc[m, 'EM'] for m in ultimos_3] if ultimos_3 else []
+    prom_em_3m = (sum(valores_3m) / len(valores_3m)) if valores_3m else 0.0
+
+    df_pip_em = df_pipeline[df_pipeline['División'].apply(clasificar_division_forecast) == 'EM']
+    em_stock = pd.to_numeric(df_pip_em['Hon Probables 2026'], errors='coerce').fillna(0).sum()
+
+    em_promedio_total = prom_em_3m * meses_proyectados
+    em_proyectado = max(em_stock, em_promedio_total)
+
+    return {
+        'meses_usados': [MESES_NOMBRE[m] for m in ultimos_3],
+        'prom_em_3m': prom_em_3m,
+        'em_stock': em_stock,
+        'em_promedio_total': em_promedio_total,
+        'em_proyectado': em_proyectado,
+    }
+
+def calcular_proyeccion_ie_forecast(df_ytd, meses_reales, meses_proyectados, df_pipeline):
+    ie_ytd_df = df_ytd[df_ytd['_div'] == 'IE']
+    menores = ie_ytd_df[ie_ytd_df['Indemnización neta'] < 1000]
+    ie_menores_real = menores['Honorarios (UF)'].sum()
+    prom_ie_menores = (ie_menores_real / meses_reales) if meses_reales else 0.0
+    ie_menores_proj = prom_ie_menores * meses_proyectados
+
+    df_pip_ie = df_pipeline[df_pipeline['División'].apply(clasificar_division_forecast) == 'IE'].copy()
+    df_pip_ie['_engie'] = df_pip_ie['Nickname'].apply(es_engie_ctm_forecast)
+    df_pip_ie['_perdida'] = pd.to_numeric(df_pip_ie['Perdida bruta (en moneda del caso)'], errors='coerce').fillna(0)
+    df_pip_ie['_hon_prob'] = pd.to_numeric(df_pip_ie['Hon Probables 2026'], errors='coerce').fillna(0)
+
+    pip_engie = df_pip_ie[df_pip_ie['_engie']]
+    ie_engie_proj = pip_engie['_hon_prob'].sum()
+
+    pip_mayores = df_pip_ie[(~df_pip_ie['_engie']) & (df_pip_ie['_perdida'] >= 1000)]
+    ie_mayores_proj = pip_mayores['_hon_prob'].sum()
+
+    ie_proyectado = ie_menores_proj + ie_mayores_proj + ie_engie_proj
+
+    return {
+        'ie_menores_real': ie_menores_real,
+        'prom_ie_menores': prom_ie_menores,
+        'ie_menores_proj': ie_menores_proj,
+        'ie_mayores_proj': ie_mayores_proj,
+        'ie_engie_proj': ie_engie_proj,
+        'ie_proyectado': ie_proyectado,
+        'n_casos_mayores': len(pip_mayores),
+        'n_casos_engie': len(pip_engie),
+    }
+
 st.set_page_config(page_title="JPV Pipeline y Seguimiento", layout="wide")
 st.title("🚀 JPV: Pipeline de Facturación Probable")
 
@@ -572,8 +703,8 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             st.markdown("---")
 
             # --- PESTAÑAS PRINCIPALES ---
-            tab_seguimiento, tab_pipeline, tab_masiva = st.tabs(
-                ["🔍 Seguimiento de Caso", "📋 Pipeline General", "📝 Actualización Masiva"]
+            tab_seguimiento, tab_pipeline, tab_masiva, tab_forecast = st.tabs(
+                ["🔍 Seguimiento de Caso", "📋 Pipeline General", "📝 Actualización Masiva", "📊 Línea Base Forecast"]
             )
 
             # ==========================================
@@ -1197,6 +1328,239 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                 if st.session_state.get("_masiva_ultimo_guardado"):
                     st.toast(f"✅ {st.session_state['_masiva_ultimo_guardado']} · {st.session_state.get('_masiva_ultimo_guardado_hora', '')}", icon="✅")
                     st.session_state["_masiva_ultimo_guardado"] = None
+
+            # ==========================================
+            # PESTAÑA LÍNEA BASE FORECAST (FASE 1: motor de cálculo + dashboard)
+            # ==========================================
+            with tab_forecast:
+                st.subheader("📊 Línea Base Forecast — Ingeniería y Equipo Móvil")
+                st.caption(
+                    "Fase 1: motor de cálculo y dashboard de revisión. La generación del PPTX y el "
+                    "historial comparativo llegan en una fase siguiente, una vez validados los números."
+                )
+
+                archivo_produccion = st.file_uploader(
+                    "Reporte de Producción del mes (Excel exportado desde Faro, hoja 'Casos')",
+                    type=["xlsx"], key="forecast_reporte_produccion"
+                )
+                usar_mes_anterior_forecast = st.checkbox(
+                    "Emitir forecast del mes anterior", key="forecast_usar_mes_anterior"
+                )
+
+                corte_forecast = calcular_corte_forecast(usar_mes_anterior_forecast)
+
+                if corte_forecast['bloqueado']:
+                    st.warning(f"⚠️ {corte_forecast['aviso']}")
+                elif archivo_produccion is None:
+                    st.info("Sube el Reporte de Producción del mes para calcular el forecast.")
+                else:
+                    try:
+                        df_reporte_forecast = cargar_reporte_produccion_forecast(archivo_produccion, FORECAST_ANIO)
+                        if df_reporte_forecast.empty:
+                            st.warning(f"⚠️ El reporte no tiene registros facturados válidos para {FORECAST_ANIO}.")
+                            df_reporte_forecast = None
+                    except Exception as error_reporte_forecast:
+                        st.error(f"❌ No se pudo procesar el Reporte de Producción: {error_reporte_forecast}")
+                        df_reporte_forecast = None
+
+                    if df_reporte_forecast is not None:
+                        if corte_forecast['aviso']:
+                            (st.info if usar_mes_anterior_forecast else st.warning)(corte_forecast['aviso'])
+
+                        # --- Panel 1: Parámetros ---
+                        st.markdown("---")
+                        st.markdown("#### 1️⃣ Parámetros del Forecast")
+                        col_par1, col_par2 = st.columns(2)
+                        with col_par1:
+                            st.metric("Forecast detectado", corte_forecast['label'])
+                            st.caption(f"Corte: {corte_forecast['nombre_mes_corte']} {FORECAST_ANIO}")
+                        with col_par2:
+                            meta_anual_forecast = st.number_input(
+                                "Meta anual (UF)", min_value=0.0,
+                                value=float(st.session_state.get("forecast_meta_valor", FORECAST_META_DEFAULT)),
+                                step=100.0, key="forecast_meta_valor"
+                            )
+
+                        # --- Cálculos base ---
+                        em_ytd, ie_ytd, mensual_forecast, df_ytd_forecast = calcular_ytd_forecast(
+                            df_reporte_forecast, FORECAST_ANIO, corte_forecast['mes_corte']
+                        )
+                        ytd_total_forecast = em_ytd + ie_ytd
+                        df_pipeline_forecast = st.session_state['df_pipeline_activo']
+                        proy_em = calcular_proyeccion_em_forecast(
+                            mensual_forecast, corte_forecast['meses_proyectados'], df_pipeline_forecast
+                        )
+                        proy_ie = calcular_proyeccion_ie_forecast(
+                            df_ytd_forecast, corte_forecast['meses_reales'], corte_forecast['meses_proyectados'],
+                            df_pipeline_forecast
+                        )
+                        if len(proy_em['meses_usados']) < 3:
+                            st.caption(
+                                f"ℹ️ El promedio EM se calculó con solo {len(proy_em['meses_usados'])} mes(es) "
+                                f"disponible(s) en el reporte cargado — aún no hay 3 meses del año para promediar."
+                            )
+
+                        # --- Panel 2: YTD ---
+                        st.markdown("---")
+                        st.markdown("#### 2️⃣ Facturación YTD (Real)")
+                        col_y1, col_y2, col_y3 = st.columns(3)
+                        col_y1.metric("Equipo Móvil YTD", f"{em_ytd:,.2f} UF")
+                        col_y2.metric("Ingeniería y Energía YTD", f"{ie_ytd:,.2f} UF")
+                        col_y3.metric("Total Consolidado YTD", f"{ytd_total_forecast:,.2f} UF")
+                        st.caption(
+                            f"Ritmo EM ({', '.join(proy_em['meses_usados']) or '—'}): {proy_em['prom_em_3m']:,.0f} UF/mes  ·  "
+                            f"Ritmo IE casos menores: {proy_ie['prom_ie_menores']:,.0f} UF/mes"
+                        )
+
+                        # --- Panel 3: Proyección editable ---
+                        st.markdown("---")
+                        st.markdown("#### 3️⃣ Proyección (editable antes de confirmar)")
+
+                        col_e1, col_e2 = st.columns(2)
+                        with col_e1:
+                            st.markdown("**Equipo Móvil**")
+                            em_stock_edit = st.number_input(
+                                "EM — Stock pipeline (Hon. Probables)", value=float(proy_em['em_stock']),
+                                step=10.0, key="forecast_em_stock"
+                            )
+                            em_promedio_edit = st.number_input(
+                                f"EM — Promedio {len(proy_em['meses_usados'])}m × {corte_forecast['meses_proyectados']} meses",
+                                value=float(proy_em['em_promedio_total']), step=10.0, key="forecast_em_promedio"
+                            )
+                            em_proyectado_edit = max(em_stock_edit, em_promedio_edit)
+                            st.caption(f"EM proyectado usado (máx. de los dos anteriores): **{em_proyectado_edit:,.0f} UF**")
+                        with col_e2:
+                            st.markdown("**Ingeniería y Energía**")
+                            ie_menores_edit = st.number_input(
+                                f"IE — Casos menores ({proy_ie['prom_ie_menores']:,.0f}/mes × {corte_forecast['meses_proyectados']})",
+                                value=float(proy_ie['ie_menores_proj']), step=10.0, key="forecast_ie_menores"
+                            )
+                            ie_mayores_edit = st.number_input(
+                                f"IE — Casos mayores pipeline ({proy_ie['n_casos_mayores']} casos, Hon. Probables)",
+                                value=float(proy_ie['ie_mayores_proj']), step=10.0, key="forecast_ie_mayores"
+                            )
+                            ie_engie_edit = st.number_input(
+                                f"IE — Engie/CTM pipeline ({proy_ie['n_casos_engie']} casos, Hon. Probables)",
+                                value=float(proy_ie['ie_engie_proj']), step=10.0, key="forecast_ie_engie"
+                            )
+                            ie_proyectado_edit = ie_menores_edit + ie_mayores_edit + ie_engie_edit
+                            st.caption(f"IE proyectado total: **{ie_proyectado_edit:,.0f} UF**")
+
+                        # --- Casos en Proceso Administrativo de Facturación ---
+                        st.markdown("---")
+                        if "forecast_casos_admin" not in st.session_state:
+                            st.session_state["forecast_casos_admin"] = []
+
+                        with st.expander("📋 Casos en Proceso Administrativo de Facturación", expanded=False):
+                            casos_admin_ids_eliminar = []
+                            for caso_admin in st.session_state["forecast_casos_admin"]:
+                                col_ca1, col_ca2, col_ca3 = st.columns([3, 1.5, 0.5])
+                                with col_ca1:
+                                    nombre_admin_nuevo = st.text_input(
+                                        "Nombre/descripción del caso", value=caso_admin["nombre"],
+                                        key=f"forecast_admin_nombre_{caso_admin['id']}"
+                                    )
+                                with col_ca2:
+                                    monto_admin_nuevo = st.number_input(
+                                        "Monto UF", value=float(caso_admin["monto"]), step=10.0,
+                                        key=f"forecast_admin_monto_{caso_admin['id']}"
+                                    )
+                                with col_ca3:
+                                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                                    if st.button("🗑️", key=f"forecast_admin_del_{caso_admin['id']}"):
+                                        casos_admin_ids_eliminar.append(caso_admin['id'])
+                                caso_admin["nombre"] = nombre_admin_nuevo
+                                caso_admin["monto"] = monto_admin_nuevo
+
+                            if casos_admin_ids_eliminar:
+                                st.session_state["forecast_casos_admin"] = [
+                                    c for c in st.session_state["forecast_casos_admin"]
+                                    if c['id'] not in casos_admin_ids_eliminar
+                                ]
+                                st.rerun()
+
+                            if st.button("➕ Agregar caso", key="forecast_admin_agregar"):
+                                st.session_state["forecast_casos_admin"].append(
+                                    {"id": str(uuid.uuid4()), "nombre": "", "monto": 0.0}
+                                )
+                                st.rerun()
+
+                            total_admin_forecast = sum(c['monto'] for c in st.session_state["forecast_casos_admin"])
+                            st.markdown(f"**Total en proceso administrativo: {total_admin_forecast:,.0f} UF**")
+
+                        # --- Panel 4: Resumen de cierres ---
+                        st.markdown("---")
+                        st.markdown("#### 4️⃣ Resumen de Cierres Proyectados")
+
+                        em_total_forecast = em_ytd + em_proyectado_edit
+                        ie_total_forecast = ie_ytd + ie_proyectado_edit
+                        cierre_sin_admin = em_total_forecast + ie_total_forecast
+                        cierre_con_admin = cierre_sin_admin + total_admin_forecast
+                        gap_sin = cierre_sin_admin - meta_anual_forecast
+                        gap_con = cierre_con_admin - meta_anual_forecast
+                        cum_sin = (cierre_sin_admin / meta_anual_forecast * 100) if meta_anual_forecast else 0
+                        cum_con = (cierre_con_admin / meta_anual_forecast * 100) if meta_anual_forecast else 0
+
+                        col_r1, col_r2 = st.columns(2)
+                        with col_r1:
+                            st.metric(
+                                "Cierre sin proceso administrativo",
+                                f"{cierre_sin_admin:,.0f} UF",
+                                f"{gap_sin:+,.0f} UF vs. meta ({cum_sin:.1f}%)"
+                            )
+                        with col_r2:
+                            if total_admin_forecast > 0:
+                                st.metric(
+                                    "Cierre con proceso administrativo",
+                                    f"{cierre_con_admin:,.0f} UF",
+                                    f"{gap_con:+,.0f} UF vs. meta ({cum_con:.1f}%)"
+                                )
+                            else:
+                                st.caption("No hay casos en proceso administrativo cargados.")
+
+                        # --- Panel 5: Gráfico de evolución (preview) ---
+                        st.markdown("---")
+                        st.markdown("#### 5️⃣ Evolución Real + Proyección (preview)")
+
+                        meses_real_idx = list(range(1, corte_forecast['mes_corte'] + 1))
+                        acumulado_real = []
+                        acum = 0.0
+                        for m in meses_real_idx:
+                            valor_mes = 0.0
+                            if m in mensual_forecast.index:
+                                valor_mes = float(mensual_forecast.loc[m].sum())
+                            acum += valor_mes
+                            acumulado_real.append(acum)
+
+                        meses_proy_idx = list(range(corte_forecast['mes_corte'] + 1, 13))
+                        incremento_mensual_sin = (
+                            (em_proyectado_edit + ie_proyectado_edit) / corte_forecast['meses_proyectados']
+                            if corte_forecast['meses_proyectados'] else 0
+                        )
+                        incremento_mensual_con = (
+                            (em_proyectado_edit + ie_proyectado_edit + total_admin_forecast) / corte_forecast['meses_proyectados']
+                            if corte_forecast['meses_proyectados'] else 0
+                        )
+
+                        filas_grafico = []
+                        for i, m in enumerate(meses_real_idx):
+                            filas_grafico.append({
+                                'Mes': MESES_NOMBRE[m][:3], 'Real': acumulado_real[i],
+                                'Proyección (sin proc. admin.)': None, 'Proyección (con proc. admin.)': None,
+                            })
+                        base_sin = acumulado_real[-1] if acumulado_real else 0
+                        base_con = base_sin
+                        for i, m in enumerate(meses_proy_idx, start=1):
+                            base_sin += incremento_mensual_sin
+                            base_con += incremento_mensual_con
+                            filas_grafico.append({
+                                'Mes': MESES_NOMBRE[m][:3], 'Real': None,
+                                'Proyección (sin proc. admin.)': base_sin,
+                                'Proyección (con proc. admin.)': base_con if total_admin_forecast > 0 else None,
+                            })
+                        df_grafico_forecast = pd.DataFrame(filas_grafico).set_index('Mes')
+                        st.line_chart(df_grafico_forecast)
+                        st.caption(f"Línea de meta: {meta_anual_forecast:,.0f} UF")
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
