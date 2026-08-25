@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.19.0"
+APP_VERSION = "1.19.1"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -1551,6 +1551,13 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             })
                         base_sin = acumulado_real[-1] if acumulado_real else 0
                         base_con = base_sin
+                        # Punto de conexión: el mes de corte también inicia las líneas de
+                        # proyección (mismo valor que lo real), para que las curvas se unan
+                        # visualmente sin salto en el gráfico.
+                        if filas_grafico:
+                            filas_grafico[-1]['Proyección (sin proc. admin.)'] = base_sin
+                            if total_admin_forecast > 0:
+                                filas_grafico[-1]['Proyección (con proc. admin.)'] = base_con
                         for i, m in enumerate(meses_proy_idx, start=1):
                             base_sin += incremento_mensual_sin
                             base_con += incremento_mensual_con
