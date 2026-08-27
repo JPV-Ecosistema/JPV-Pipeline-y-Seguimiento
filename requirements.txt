@@ -5,3 +5,4 @@ xlsxwriter
 gspread
 google-auth
 tzdata
+python-pptx

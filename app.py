@@ -10,10 +10,11 @@ import time
 import uuid
 import gspread
 from google.oauth2.service_account import Credentials
+from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.18.0"
+APP_VERSION = "1.19.1"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -1550,6 +1551,13 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             })
                         base_sin = acumulado_real[-1] if acumulado_real else 0
                         base_con = base_sin
+                        # Punto de conexión: el mes de corte también inicia las líneas de
+                        # proyección (mismo valor que lo real), para que las curvas se unan
+                        # visualmente sin salto en el gráfico.
+                        if filas_grafico:
+                            filas_grafico[-1]['Proyección (sin proc. admin.)'] = base_sin
+                            if total_admin_forecast > 0:
+                                filas_grafico[-1]['Proyección (con proc. admin.)'] = base_con
                         for i, m in enumerate(meses_proy_idx, start=1):
                             base_sin += incremento_mensual_sin
                             base_con += incremento_mensual_con
@@ -1561,6 +1569,91 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                         df_grafico_forecast = pd.DataFrame(filas_grafico).set_index('Mes')
                         st.line_chart(df_grafico_forecast)
                         st.caption(f"Línea de meta: {meta_anual_forecast:,.0f} UF")
+
+                        # --- Panel 6: Generación de la presentación PPTX ---
+                        st.markdown("---")
+                        st.markdown("#### 🎯 Generar Presentación PPTX")
+
+                        pipeline_bruto_total = pd.to_numeric(
+                            df_pipeline_forecast['Honorarios (UF)'], errors='coerce'
+                        ).fillna(0).sum()
+
+                        valores_em_mensual = [
+                            float(mensual_forecast.loc[m, 'EM']) if 'EM' in mensual_forecast.columns and m in mensual_forecast.index else 0.0
+                            for m in meses_real_idx
+                        ]
+                        valores_ie_mensual = [
+                            float(mensual_forecast.loc[m, 'IE']) if 'IE' in mensual_forecast.columns and m in mensual_forecast.index else 0.0
+                            for m in meses_real_idx
+                        ]
+
+                        pct_stock_cubre = (
+                            (proy_em['em_stock'] / proy_em['em_promedio_total'] * 100)
+                            if proy_em['em_promedio_total'] else 0
+                        )
+
+                        datos_pptx = {
+                            'anio': FORECAST_ANIO,
+                            'label': corte_forecast['label'],
+                            'mes_corte': corte_forecast['mes_corte'],
+                            'nombre_mes_corte': corte_forecast['nombre_mes_corte'],
+                            'nombre_mes_inicio': MESES_NOMBRE[1],
+                            'meses_reales': corte_forecast['meses_reales'],
+                            'meses_proyectados': corte_forecast['meses_proyectados'],
+                            'fecha_emision': f"{ahora_cl().day} de {MESES_NOMBRE[ahora_cl().month].lower()} de {ahora_cl().year}",
+                            'meta': meta_anual_forecast,
+                            'em_ytd': em_ytd, 'ie_ytd': ie_ytd, 'ytd_total': ytd_total_forecast,
+                            'em_proyectado': em_proyectado_edit, 'ie_proyectado': ie_proyectado_edit,
+                            'em_total': em_total_forecast, 'ie_total': ie_total_forecast,
+                            'cierre_sin_admin': cierre_sin_admin, 'cierre_con_admin': cierre_con_admin,
+                            'gap_sin': gap_sin, 'gap_con': gap_con, 'cum_sin': cum_sin, 'cum_con': cum_con,
+                            'total_admin': total_admin_forecast,
+                            'casos_admin': st.session_state["forecast_casos_admin"],
+                            'pipeline_bruto_total': pipeline_bruto_total,
+                            'proy_em': proy_em, 'proy_ie': proy_ie,
+                            'fuente_texto': f"Fuente: Reporte de Producción Faro ({MESES_NOMBRE[1][:3]}-{corte_forecast['nombre_mes_corte'][:3]} {FORECAST_ANIO}) y Pipeline JPV",
+                            'grafico_meses': [row['Mes'] for row in filas_grafico],
+                            'grafico_real': [row['Real'] for row in filas_grafico],
+                            'grafico_proy_sin': [row['Proyección (sin proc. admin.)'] for row in filas_grafico],
+                            'grafico_proy_con': [row['Proyección (con proc. admin.)'] for row in filas_grafico],
+                            'meses_mensual': [MESES_NOMBRE[m][:3] for m in meses_real_idx],
+                            'valores_em_mensual': valores_em_mensual,
+                            'valores_ie_mensual': valores_ie_mensual,
+                            'bullets_linea_base': [
+                                f"Ritmo EM últimos {len(proy_em['meses_usados'])} meses ({'-'.join(m[:3] for m in proy_em['meses_usados']) or '—'}): {proy_em['prom_em_3m']:,.0f} UF/mes.".replace(',', '.'),
+                                f"Ritmo IE casos menores (<1.000 UF pérdida): {proy_ie['prom_ie_menores']:,.0f} UF/mes.".replace(',', '.'),
+                                f"Total consolidado YTD: {ytd_total_forecast:,.2f} UF.".replace(',', '.'),
+                            ],
+                            'bullets_accion_em': [
+                                f"La proyección usa el promedio de los últimos {len(proy_em['meses_usados'])} meses ({proy_em['prom_em_3m']:,.0f} UF/mes) como base.".replace(',', '.'),
+                                f"El stock en pipeline ({proy_em['em_stock']:,.0f} UF) cubre el {pct_stock_cubre:.0f}% de la proyección — el resto depende de nuevas asignaciones.".replace(',', '.'),
+                            ],
+                            'bullets_accion_ie': [
+                                f"Casos menores ({proy_ie['prom_ie_menores']:,.0f} UF/mes): mantener el ritmo histórico es clave para la proyección.".replace(',', '.'),
+                                f"Casos mayores pipeline: {proy_ie['n_casos_mayores']} caso(s) ponderados por probabilidad, total {proy_ie['ie_mayores_proj']:,.0f} UF.".replace(',', '.'),
+                                f"Engie/CTM: {proy_ie['n_casos_engie']} caso(s), total {proy_ie['ie_engie_proj']:,.0f} UF.".replace(',', '.'),
+                            ],
+                        }
+
+                        if st.button("🎯 Generar Presentación PPTX", type="primary", key="forecast_generar_pptx"):
+                            try:
+                                pptx_bytes = generar_pptx_forecast(datos_pptx)
+                                fecha_archivo = ahora_cl().strftime("%d-%m-%y")
+                                nombre_archivo = f"Linea_Base_{corte_forecast['label']}_{fecha_archivo}.pptx"
+                                st.session_state["_forecast_pptx_bytes"] = pptx_bytes
+                                st.session_state["_forecast_pptx_nombre"] = nombre_archivo
+                                st.success("✅ Presentación generada correctamente.")
+                            except Exception as error_pptx:
+                                st.error(f"❌ No se pudo generar la presentación: {error_pptx}")
+
+                        if st.session_state.get("_forecast_pptx_bytes"):
+                            st.download_button(
+                                label=f"📥 Descargar {st.session_state['_forecast_pptx_nombre']}",
+                                data=st.session_state["_forecast_pptx_bytes"],
+                                file_name=st.session_state["_forecast_pptx_nombre"],
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                key="forecast_descargar_pptx"
+                            )
 
 else:
     st.info("Sube los archivos para procesar el Pipeline. El sistema reportará ingresos, salidas y aplicará el formato al Excel.")
