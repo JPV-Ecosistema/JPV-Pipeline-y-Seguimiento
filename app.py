@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.19.1"
+APP_VERSION = "1.19.2"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -277,11 +277,12 @@ def detectar_historial_desde_excel(archivo_historial):
 
 def normalizar_para_base_maestra(df):
     """Replica la normalización que usa el Planificador Semanal antes de guardar en Base_Maestra."""
-    df_norm = df.fillna("")
+    df_norm = df.copy()
     for col in df_norm.columns:
-        df_norm[col] = df_norm[col].astype(str)
         df_norm[col] = df_norm[col].apply(
-            lambda x: "" if x.strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"] else x
+            lambda x: ""
+            if pd.isna(x) or str(x).strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"]
+            else str(x)
         )
     return df_norm
 
