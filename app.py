@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.21.0"
+APP_VERSION = "1.22.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
