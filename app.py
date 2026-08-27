@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.22.0"
+APP_VERSION = "1.23.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -388,12 +388,20 @@ def es_engie_ctm_forecast(nickname):
     texto = str(nickname).lower()
     return any(k.lower() in texto for k in keywords)
 
-def calcular_corte_forecast(usar_mes_anterior=False):
-    """Determina el mes de corte (último mes completo cerrado) y arma la etiqueta N+M."""
+def calcular_corte_forecast(modo="oficial"):
+    """Determina el mes de corte y arma la etiqueta N+M.
+    modo='oficial': último mes completo cerrado (mes_actual - 1), el forecast normal.
+    modo='avance': mes en curso, todavía sin cerrar facturación (mes_actual) — permite
+        adelantar un AVANCE del próximo forecast (p.ej. 8+4 antes de que cierre agosto)
+        con datos parciales.
+    modo='anterior': un mes antes del oficial (mes_actual - 2)."""
     mes_actual = ahora_cl().month
-    mes_corte = mes_actual - 1
-    if usar_mes_anterior:
-        mes_corte -= 1
+    if modo == "avance":
+        mes_corte = mes_actual
+    elif modo == "anterior":
+        mes_corte = mes_actual - 2
+    else:
+        mes_corte = mes_actual - 1
 
     bloqueado = False
     aviso = None
@@ -415,8 +423,14 @@ def calcular_corte_forecast(usar_mes_anterior=False):
     meses_proyectados = (12 - mes_corte) if not bloqueado else 0
     label = f"{meses_reales}+{meses_proyectados}" if not bloqueado else "—"
 
-    if usar_mes_anterior and not bloqueado:
-        aviso = f"⚠️ Emitiendo forecast {label} con datos hasta {MESES_NOMBRE[mes_corte]}."
+    if not bloqueado:
+        if modo == "avance":
+            aviso = (
+                f"⚠️ AVANCE {label} con datos PARCIALES de {MESES_NOMBRE[mes_corte]} "
+                "(mes en curso, todavía sin cerrar facturación). No reemplaza al forecast oficial."
+            )
+        elif modo == "anterior":
+            aviso = f"⚠️ Emitiendo forecast {label} con datos hasta {MESES_NOMBRE[mes_corte]}."
 
     return {
         'mes_corte': mes_corte,
@@ -426,6 +440,7 @@ def calcular_corte_forecast(usar_mes_anterior=False):
         'bloqueado': bloqueado,
         'aviso': aviso,
         'nombre_mes_corte': MESES_NOMBRE[mes_corte] if 1 <= mes_corte <= 12 else '—',
+        'es_avance': modo == "avance",
     }
 
 def cargar_reporte_produccion_forecast(archivo, anio):
@@ -1360,19 +1375,26 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             with tab_forecast:
                 st.subheader("📊 Línea Base Forecast — Ingeniería y Equipo Móvil")
                 st.caption(
-                    "Fase 1: motor de cálculo y dashboard de revisión. La generación del PPTX y el "
-                    "historial comparativo llegan en una fase siguiente, una vez validados los números."
+                    "Motor de cálculo, dashboard de revisión y generación de la presentación PPTX. "
+                    "El historial comparativo entre forecasts llega en una fase siguiente."
                 )
 
                 archivo_produccion = st.file_uploader(
                     "Reporte de Producción del mes (Excel exportado desde Faro, hoja 'Casos')",
                     type=["xlsx"], key="forecast_reporte_produccion"
                 )
-                usar_mes_anterior_forecast = st.checkbox(
-                    "Emitir forecast del mes anterior", key="forecast_usar_mes_anterior"
+                modo_forecast = st.radio(
+                    "Período a emitir",
+                    options=["oficial", "avance", "anterior"],
+                    format_func=lambda m: {
+                        "oficial": "Forecast oficial (último mes cerrado)",
+                        "avance": "AVANCE del mes en curso (aún sin cerrar)",
+                        "anterior": "Forecast del mes anterior",
+                    }[m],
+                    horizontal=True, key="forecast_modo_periodo",
                 )
 
-                corte_forecast = calcular_corte_forecast(usar_mes_anterior_forecast)
+                corte_forecast = calcular_corte_forecast(modo_forecast)
 
                 if corte_forecast['bloqueado']:
                     st.warning(f"⚠️ {corte_forecast['aviso']}")
@@ -1390,7 +1412,12 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                     if df_reporte_forecast is not None:
                         if corte_forecast['aviso']:
-                            (st.info if usar_mes_anterior_forecast else st.warning)(corte_forecast['aviso'])
+                            if modo_forecast == "avance":
+                                st.error(corte_forecast['aviso'])
+                            elif modo_forecast == "anterior":
+                                st.info(corte_forecast['aviso'])
+                            else:
+                                st.warning(corte_forecast['aviso'])
 
                         # --- Panel 1: Parámetros ---
                         st.markdown("---")
@@ -1639,7 +1666,11 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             'casos_admin': st.session_state["forecast_casos_admin"],
                             'pipeline_bruto_total': pipeline_bruto_total,
                             'proy_em': proy_em, 'proy_ie': proy_ie,
-                            'fuente_texto': f"Fuente: Reporte de Producción Faro ({MESES_NOMBRE[1][:3]}-{corte_forecast['nombre_mes_corte'][:3]} {FORECAST_ANIO}) y Pipeline JPV",
+                            'es_avance': corte_forecast['es_avance'],
+                            'fuente_texto': (
+                                ("AVANCE — " if corte_forecast['es_avance'] else "")
+                                + f"Fuente: Reporte de Producción Faro ({MESES_NOMBRE[1][:3]}-{corte_forecast['nombre_mes_corte'][:3]} {FORECAST_ANIO}) y Pipeline JPV"
+                            ),
                             'grafico_meses': [row['Mes'] for row in filas_grafico],
                             'grafico_real': [row['Real'] for row in filas_grafico],
                             'grafico_proy_sin': [row['Proyección (sin proc. admin.)'] for row in filas_grafico],
@@ -1666,14 +1697,22 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             'top10_menor50': top10_menor50_forecast,
                         }
 
-                        if st.button("🎯 Generar Presentación PPTX", type="primary", key="forecast_generar_pptx"):
+                        texto_boton_pptx = (
+                            "🎯 Generar AVANCE PPTX" if corte_forecast['es_avance']
+                            else "🎯 Generar Presentación PPTX"
+                        )
+                        if st.button(texto_boton_pptx, type="primary", key="forecast_generar_pptx"):
                             try:
                                 pptx_bytes = generar_pptx_forecast(datos_pptx)
                                 fecha_archivo = ahora_cl().strftime("%d-%m-%y")
-                                nombre_archivo = f"Linea_Base_{corte_forecast['label']}_{fecha_archivo}.pptx"
+                                sufijo_avance = "_AVANCE" if corte_forecast['es_avance'] else ""
+                                nombre_archivo = f"Linea_Base_{corte_forecast['label']}{sufijo_avance}_{fecha_archivo}.pptx"
                                 st.session_state["_forecast_pptx_bytes"] = pptx_bytes
                                 st.session_state["_forecast_pptx_nombre"] = nombre_archivo
-                                st.success("✅ Presentación generada correctamente.")
+                                if corte_forecast['es_avance']:
+                                    st.success("✅ AVANCE generado correctamente. Recuerda que usa datos parciales, no es el forecast oficial.")
+                                else:
+                                    st.success("✅ Presentación generada correctamente.")
                             except Exception as error_pptx:
                                 st.error(f"❌ No se pudo generar la presentación: {error_pptx}")
 

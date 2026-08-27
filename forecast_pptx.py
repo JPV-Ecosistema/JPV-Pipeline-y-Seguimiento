@@ -75,7 +75,7 @@ def _sin_borde(shape):
     shape.line.fill.background()
 
 
-def nueva_slide(prs):
+def nueva_slide(prs, es_avance=False):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
     # Degradado sutil (en vez de blanco plano) para dar algo de profundidad al fondo.
@@ -92,7 +92,21 @@ def nueva_slide(prs):
     # "membrete" a cada slide de contenido, en vez de quedar flotando en blanco.
     barra(slide, 0)
     barra(slide, Emu(6760464))
+    if es_avance:
+        sello_avance(slide)
     return slide
+
+
+def sello_avance(slide):
+    """Sello 'AVANCE' en la esquina superior derecha: se repite en todas las slides de
+    contenido cuando el forecast se emite con el mes en curso todavía sin cerrar, para
+    que quede inconfundible que no es el forecast oficial. encabezado_slide() reserva
+    el ancho de este espacio para que nunca se superponga con el título."""
+    ancho, alto = Emu(1920240), Emu(384048)
+    x, y = Emu(int(SLIDE_W) - int(ancho) - 137160), Emu(137160)
+    caja(slide, x, y, ancho, alto, fill_hex=COLOR_ROJO, border_hex=None)
+    texto(slide, x, y, ancho, alto, ["AVANCE", "Datos preliminares"], 10, "FFFFFF",
+          bold=True, align=PP_ALIGN.CENTER, margenes=False)
 
 
 def barra(slide, y):
@@ -152,9 +166,12 @@ def pie_de_pagina(slide, fuente_texto):
 
 
 def encabezado_slide(slide, titulo, subtitulo, color_subtitulo=COLOR_IE):
-    texto(slide, MARGEN_X, Emu(219456), CONTENIDO_W, Emu(512064), titulo, 24, COLOR_TITULO,
+    # Ancho reservado (en vez de CONTENIDO_W completo) para dejar libre la esquina
+    # superior derecha, donde va el sello "AVANCE" cuando corresponde.
+    ancho_titulo = Emu(9342120)
+    texto(slide, MARGEN_X, Emu(219456), ancho_titulo, Emu(512064), titulo, 24, COLOR_TITULO,
           bold=True, fuente=FUENTE_TITULO)
-    texto(slide, MARGEN_X, Emu(731520), CONTENIDO_W, Emu(304800), subtitulo, 14, color_subtitulo, bold=True)
+    texto(slide, MARGEN_X, Emu(731520), ancho_titulo, Emu(304800), subtitulo, 14, color_subtitulo, bold=True)
 
 
 def _fmt_uf(valor):
@@ -257,13 +274,17 @@ def _reemplazar_texto_clonado(slide, nombre_shape, lineas, size=None):
 # ---------------------------------------------------------
 def slide_portada(prs, datos):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
+    es_avance = datos.get("es_avance", False)
+    subtitulo_forecast = f"Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}"
+    if es_avance:
+        subtitulo_forecast = "AVANCE — " + subtitulo_forecast
     plantilla = _cargar_plantilla_jpv()
     if plantilla is not None:
         clonar_shapes_de_plantilla(slide, plantilla.slides[0])
         _reemplazar_texto_clonado(slide, "CuadroTexto 9", [
             "Línea Base Forecast",
             f"Ingeniería y Equipo Móvil {datos['anio']}",
-            f"Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}",
+            subtitulo_forecast,
         ])
         _reemplazar_texto_clonado(slide, "CuadroTexto 1", datos["fecha_emision"])
     else:
@@ -278,17 +299,19 @@ def slide_portada(prs, datos):
         texto(slide, Emu(853440), Emu(1706880), Emu(10485120), Emu(853440),
               "Ingeniería y Equipo Móvil", 42, COLOR_EM, bold=True, fuente=FUENTE_TITULO)
         texto(slide, Emu(853440), Emu(2560320), Emu(10485120), Emu(548640),
-              f"Línea Base {datos['anio']}: Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}",
+              f"Línea Base {datos['anio']}: {subtitulo_forecast}",
               20, COLOR_TEXTO)
         texto(slide, Emu(853440), Emu(6217920), Emu(6096000), Emu(243840),
               datos["fecha_emision"], 10, COLOR_MUTED2)
+    if es_avance:
+        sello_avance(slide)
     return slide
 
 
 # SLIDE 2 — AGENDA
 # ---------------------------------------------------------
 def slide_agenda(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     texto(slide, MARGEN_X, Emu(609600), CONTENIDO_W, Emu(609600), "Agenda", 36, COLOR_TITULO,
           bold=True, fuente=FUENTE_TITULO)
 
@@ -315,7 +338,7 @@ def slide_agenda(prs, datos):
 # SLIDE 3 — TÍTULO DE SECCIÓN
 # ---------------------------------------------------------
 def slide_titulo_seccion(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     texto(slide, Emu(853440), Emu(2560320), Emu(10485120), Emu(1280160),
           [f"Forecast Financiero {datos['anio']}: Análisis de", "Producción y Facturación."],
           36, COLOR_TITULO, bold=True, fuente=FUENTE_TITULO)
@@ -329,7 +352,7 @@ def slide_titulo_seccion(prs, datos):
 # SLIDE 4 — LÍNEA BASE REAL
 # ---------------------------------------------------------
 def slide_linea_base_real(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(
         slide,
         "1. Línea Base Real (Cierre Facturación)",
@@ -381,7 +404,7 @@ def slide_linea_base_real(prs, datos):
 # SLIDE 5 — PROYECCIÓN Y PIPELINE
 # ---------------------------------------------------------
 def slide_proyeccion_pipeline(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(
         slide,
         f"2. Proyección y Pipeline {datos['label']} (Resto del año)",
@@ -445,7 +468,7 @@ def slide_proyeccion_pipeline(prs, datos):
 # SLIDE — CASOS EN PROCESO ADMINISTRATIVO (condicional)
 # ---------------------------------------------------------
 def slide_casos_admin(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(slide, "Casos en Proceso Administrativo de Facturación",
                       f"Total: {_fmt_uf(datos['total_admin'])} UF", COLOR_CTM)
 
@@ -469,7 +492,7 @@ def slide_casos_admin(prs, datos):
 # SLIDE — FORECAST TOTAL
 # ---------------------------------------------------------
 def slide_forecast_total(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(slide, f"2. Forecast {datos['label']} (Total año {datos['anio']})",
                       f"Proyección (Forecast {datos['nombre_mes_corte']}—Diciembre)", COLOR_IE)
 
@@ -530,7 +553,7 @@ def slide_forecast_total(prs, datos):
 # SLIDE — ANÁLISIS DE DESVIACIÓN
 # ---------------------------------------------------------
 def slide_desviacion(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(slide, f"3. Análisis de Desviación (Gap) vs. Meta — Forecast {datos['label']}",
                       "Evaluación de Brecha Estratégica y Acciones Mitigadoras", COLOR_IE)
 
@@ -619,7 +642,7 @@ def _colorear_series(chart, colores):
 # SLIDE — EVOLUCIÓN N+M (gráfico de curvas acumuladas)
 # ---------------------------------------------------------
 def slide_evolucion(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(slide, f"Evolución Forecast {datos['label']} año {datos['anio']}",
                       "Real acumulado + proyección hasta diciembre", COLOR_IE)
 
@@ -734,7 +757,7 @@ _COLUMNAS_TOP10 = [
 
 
 def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(slide, titulo, subtitulo, color_accent)
 
     casos = datos.get(clave, [])
@@ -761,7 +784,7 @@ def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
 # SLIDE — FACTURACIÓN MENSUAL POR DIVISIÓN (barras)
 # ---------------------------------------------------------
 def slide_facturacion_mensual(prs, datos):
-    slide = nueva_slide(prs)
+    slide = nueva_slide(prs, datos.get("es_avance", False))
     encabezado_slide(slide, f"Facturación Mensual por División — {datos['nombre_mes_inicio']} a {datos['nombre_mes_corte']} {datos['anio']}",
                       "Real, por mes cerrado", COLOR_IE)
 
