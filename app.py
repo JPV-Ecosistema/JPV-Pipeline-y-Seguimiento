@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.19.2"
+APP_VERSION = "1.21.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -501,6 +501,29 @@ def calcular_proyeccion_ie_forecast(df_ytd, meses_reales, meses_proyectados, df_
         'n_casos_mayores': len(pip_mayores),
         'n_casos_engie': len(pip_engie),
     }
+
+def calcular_top10_probabilidad_forecast(df_pipeline, valores_prob, n=10):
+    """Top n casos del pipeline cuya 'Probabilidad cierre 2026' esté en valores_prob,
+    ordenados por 'Perdida bruta (en moneda del caso)' de mayor a menor."""
+    df_filtrado = df_pipeline[
+        df_pipeline['Probabilidad cierre 2026'].astype(str).isin(valores_prob)
+    ].copy()
+    df_filtrado['_perdida_num'] = pd.to_numeric(
+        df_filtrado['Perdida bruta (en moneda del caso)'], errors='coerce'
+    ).fillna(0)
+    df_filtrado = df_filtrado.sort_values('_perdida_num', ascending=False).head(n)
+    return [
+        {
+            'caso': str(fila.get('Número de caso', '')),
+            'nickname': str(fila.get('Nickname', '')) or '(sin nombre)',
+            'division': str(fila.get('División', '')),
+            'ajustador': str(fila.get('Ajustador senior', '')),
+            'perdida': fila['_perdida_num'],
+            'divisa': str(fila.get('Divisa', '')),
+            'probabilidad': str(fila.get('Probabilidad cierre 2026', '')),
+        }
+        for _, fila in df_filtrado.iterrows()
+    ]
 
 st.set_page_config(page_title="JPV Pipeline y Seguimiento", layout="wide")
 st.title("🚀 JPV: Pipeline de Facturación Probable")
@@ -1593,6 +1616,10 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             if proy_em['em_promedio_total'] else 0
                         )
 
+                        top10_100_forecast = calcular_top10_probabilidad_forecast(df_pipeline_forecast, ['100%'])
+                        top10_75_forecast = calcular_top10_probabilidad_forecast(df_pipeline_forecast, ['75%'])
+                        top10_menor50_forecast = calcular_top10_probabilidad_forecast(df_pipeline_forecast, ['0%', '25%'])
+
                         datos_pptx = {
                             'anio': FORECAST_ANIO,
                             'label': corte_forecast['label'],
@@ -1634,6 +1661,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                 f"Casos mayores pipeline: {proy_ie['n_casos_mayores']} caso(s) ponderados por probabilidad, total {proy_ie['ie_mayores_proj']:,.0f} UF.".replace(',', '.'),
                                 f"Engie/CTM: {proy_ie['n_casos_engie']} caso(s), total {proy_ie['ie_engie_proj']:,.0f} UF.".replace(',', '.'),
                             ],
+                            'top10_100': top10_100_forecast,
+                            'top10_75': top10_75_forecast,
+                            'top10_menor50': top10_menor50_forecast,
                         }
 
                         if st.button("🎯 Generar Presentación PPTX", type="primary", key="forecast_generar_pptx"):
