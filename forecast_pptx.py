@@ -1,15 +1,16 @@
 """
 Generador de la presentación PPTX "Línea Base Forecast" (Ingeniería y Equipo Móvil).
 
-Replica el estilo navy oscuro del deck de referencia de JPV Asociados. Las coordenadas
-de layout se calibraron a partir del XML real de ese deck (10in x 5.625in), no son
-un diseño inventado desde cero.
+Replica el layout del deck de referencia de JPV Asociados (coordenadas calibradas a
+partir del XML real de ese deck, 10in x 5.625in), con una paleta clara en vez de la
+navy oscura original (a pedido del usuario).
 
-Fase 2: genera 9 slides (Portada, Agenda, Título sección, Línea Base Real, Proyección y
-Pipeline, Casos en Proceso Administrativo [si aplica], Forecast Total, Análisis de
-Desviación, Evolución 7+5, Facturación Mensual). Las 2 slides comparativas que dependen
-del historial acumulado de forecasts (Comparativo Forecasts y Tabla Comparativa) llegan
-en la Fase 3, junto con la persistencia del historial.
+Fase 2: genera 12-13 slides (Portada, Agenda, Título sección, Línea Base Real, Proyección
+y Pipeline, Casos en Proceso Administrativo [si aplica], Forecast Total, Análisis de
+Desviación, Evolución 7+5, Facturación Mensual, y 3 slides de Top 10 casos por Pérdida
+Bruta segmentados por Probabilidad de Cierre: 100%, 75% y menor a 50%). Las 2 slides
+comparativas que dependen del historial acumulado de forecasts (Comparativo Forecasts y
+Tabla Comparativa) llegan en la Fase 3, junto con la persistencia del historial.
 """
 import os
 from pptx import Presentation
@@ -20,19 +21,19 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 
-# --- Paleta (idéntica al deck de referencia) ---
-COLOR_BG = "1A202C"
-COLOR_BAR = "3182CE"
-COLOR_CARD_BG = "2D3748"
-COLOR_CARD_BORDER = "4A5568"
-COLOR_IE = "4299E1"
-COLOR_EM = "F6AD55"
-COLOR_CTM = "00A896"
-COLOR_VERDE = "68D391"
-COLOR_ROJO = "E53E3E"
-COLOR_TEXTO = "E2E8F0"
-COLOR_MUTED = "A0AEC0"
-COLOR_MUTED2 = "718096"
+# --- Paleta clara (mismo layout que el deck de referencia, tonos aclarados a pedido del usuario) ---
+COLOR_BG = "FFFFFF"
+COLOR_BAR = "1A365D"
+COLOR_CARD_BG = "F5F7FA"
+COLOR_CARD_BORDER = "D9E0E8"
+COLOR_IE = "2B6CB0"
+COLOR_EM = "C05621"
+COLOR_CTM = "00796B"
+COLOR_VERDE = "2F855A"
+COLOR_ROJO = "C53030"
+COLOR_TEXTO = "1A202C"
+COLOR_MUTED = "718096"
+COLOR_MUTED2 = "4A5568"
 FUENTE = "Calibri"
 
 SLIDE_W = Emu(9144000)
@@ -40,7 +41,7 @@ SLIDE_H = Emu(5143500)
 MARGEN_X = Emu(457200)
 CONTENIDO_W = Emu(8229600)
 
-LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo_jpv_blanco.png")
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo_jpv_navy.png")
 LOGO_ASPECT = 1351 / 208  # ancho/alto del archivo real
 
 
@@ -517,6 +518,87 @@ def slide_evolucion(prs, datos):
 
 
 # ---------------------------------------------------------
+# Helper — tabla nativa de casos (encabezado + filas alternadas)
+# ---------------------------------------------------------
+def _tabla_casos(slide, x, y, cx, cy, columnas, filas, color_header_bg):
+    """columnas: lista de (titulo, ancho_emu). filas: lista de tuplas de texto, mismo orden que columnas."""
+    n_filas = len(filas) + 1
+    n_cols = len(columnas)
+    gf = slide.shapes.add_table(n_filas, n_cols, x, y, cx, cy)
+    table = gf.table
+    table.first_row = False
+    table.horz_banding = False
+
+    for c, (_, ancho) in enumerate(columnas):
+        table.columns[c].width = Emu(ancho)
+    alto_fila = Emu(int(cy / n_filas))
+    for r in range(n_filas):
+        table.rows[r].height = alto_fila
+
+    def _celda(r, c, texto_valor, fondo_hex, color_hex, bold, align):
+        cell = table.cell(r, c)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = _rgb(fondo_hex)
+        cell.margin_left = cell.margin_right = Emu(45720)
+        cell.margin_top = cell.margin_bottom = Emu(9144)
+        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        tf = cell.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.alignment = align
+        run = p.add_run()
+        run.text = str(texto_valor)
+        run.font.size = Pt(9.5 if r == 0 else 9)
+        run.font.bold = bold
+        run.font.name = FUENTE
+        run.font.color.rgb = _rgb(color_hex)
+
+    for c, (titulo, _) in enumerate(columnas):
+        _celda(0, c, titulo, color_header_bg, "FFFFFF", True,
+               PP_ALIGN.LEFT if c < 2 else PP_ALIGN.CENTER)
+
+    for r, fila in enumerate(filas, start=1):
+        fondo = COLOR_BG if r % 2 == 1 else COLOR_CARD_BG
+        for c, valor in enumerate(fila):
+            _celda(r, c, valor, fondo, COLOR_TEXTO, False,
+                   PP_ALIGN.LEFT if c < 2 else PP_ALIGN.CENTER)
+    return gf
+
+
+# ---------------------------------------------------------
+# SLIDES — TOP 10 POR PROBABILIDAD DE CIERRE (ordenados por pérdida bruta)
+# ---------------------------------------------------------
+_COLUMNAS_TOP10 = [
+    ("N° Caso", 950000), ("Nickname", 2350000), ("División", 750000),
+    ("Ajustador", 1450000), ("Pérdida Bruta", 1750000), ("Prob.", 979600),
+]
+
+
+def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
+    slide = nueva_slide(prs)
+    encabezado_slide(slide, titulo, subtitulo, color_accent)
+
+    casos = datos.get(clave, [])
+    if not casos:
+        texto(slide, MARGEN_X, Emu(1828800), CONTENIDO_W, Emu(457200),
+              "No hay casos que cumplan este criterio.", 12, COLOR_MUTED)
+    else:
+        filas = [
+            (
+                c['caso'], c['nickname'], c['division'], c['ajustador'],
+                f"{c['perdida']:,.0f} {c['divisa']}".replace(",", "."),
+                c['probabilidad'],
+            )
+            for c in casos
+        ]
+        _tabla_casos(slide, MARGEN_X, Emu(1005840), CONTENIDO_W, Emu(3600000),
+                     _COLUMNAS_TOP10, filas, color_accent)
+
+    pie_de_pagina(slide, datos['fuente_texto'])
+    return slide
+
+
+# ---------------------------------------------------------
 # SLIDE — FACTURACIÓN MENSUAL POR DIVISIÓN (barras)
 # ---------------------------------------------------------
 def slide_facturacion_mensual(prs, datos):
@@ -557,6 +639,12 @@ def generar_pptx_forecast(datos):
     slide_desviacion(prs, datos)
     slide_evolucion(prs, datos)
     slide_facturacion_mensual(prs, datos)
+    slide_top_probabilidad(prs, datos, 'top10_100', "Top 10 — Casos con Probabilidad de Cierre 100%",
+                            "Ordenados por Pérdida Bruta (mayor a menor)", COLOR_VERDE)
+    slide_top_probabilidad(prs, datos, 'top10_75', "Top 10 — Casos con Probabilidad de Cierre 75%",
+                            "Ordenados por Pérdida Bruta (mayor a menor)", COLOR_IE)
+    slide_top_probabilidad(prs, datos, 'top10_menor50', "Top 10 — Casos con Probabilidad de Cierre < 50%",
+                            "Ordenados por Pérdida Bruta (mayor a menor)", COLOR_ROJO)
 
     buffer = _io.BytesIO()
     prs.save(buffer)
