@@ -1,27 +1,34 @@
 """
 Generador de la presentación PPTX "Línea Base Forecast" (Ingeniería y Equipo Móvil).
 
-Replica el layout del deck de referencia de JPV Asociados (coordenadas calibradas a
-partir del XML real de ese deck, 10in x 5.625in), con una paleta clara en vez de la
-navy oscura original (a pedido del usuario).
+La portada y la slide de cierre se clonan 1:1 desde el formato corporativo de JPV
+(assets/plantilla_jpv.pptx, provisto por el usuario) — mismo fondo, logos y estilo,
+solo cambia el texto dinámico (título y fecha). El título de las demás slides usa la
+misma tipografía del formato (Arial Black, naranja de marca) que la slide interior de
+ese documento. El resto del contenido usa una paleta clara con foco en una idea por
+slide, buen contraste y tamaños de fuente legibles en pantalla grande.
 
-Fase 2: genera 12-13 slides (Portada, Agenda, Título sección, Línea Base Real, Proyección
+Fase 2: genera 15 slides (Portada, Agenda, Título sección, Línea Base Real, Proyección
 y Pipeline, Casos en Proceso Administrativo [si aplica], Forecast Total, Análisis de
-Desviación, Evolución 7+5, Facturación Mensual, y 3 slides de Top 10 casos por Pérdida
-Bruta segmentados por Probabilidad de Cierre: 100%, 75% y menor a 50%). Las 2 slides
-comparativas que dependen del historial acumulado de forecasts (Comparativo Forecasts y
-Tabla Comparativa) llegan en la Fase 3, junto con la persistencia del historial.
+Desviación, Evolución 7+5, Facturación Mensual, 3 slides de Top 10 casos por Pérdida
+Bruta segmentados por Probabilidad de Cierre [100%, 75% y menor a 50%], y Cierre). Las
+2 slides comparativas que dependen del historial acumulado de forecasts (Comparativo
+Forecasts y Tabla Comparativa) llegan en la Fase 3, junto con la persistencia del
+historial.
 """
+import copy
+import io as _io_clon
 import os
 from pptx import Presentation
 from pptx.util import Emu, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.oxml.ns import qn
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 
-# --- Paleta clara (mismo layout que el deck de referencia, tonos aclarados a pedido del usuario) ---
+# --- Paleta clara con acentos de marca JPV (naranja de la plantilla corporativa) ---
 COLOR_BG = "FFFFFF"
 COLOR_BAR = "1A365D"
 COLOR_CARD_BG = "F5F7FA"
@@ -34,15 +41,20 @@ COLOR_ROJO = "C53030"
 COLOR_TEXTO = "1A202C"
 COLOR_MUTED = "718096"
 COLOR_MUTED2 = "4A5568"
+COLOR_TITULO = "FF9933"
 FUENTE = "Calibri"
+FUENTE_TITULO = "Arial Black"
 
-SLIDE_W = Emu(9144000)
-SLIDE_H = Emu(5143500)
-MARGEN_X = Emu(457200)
-CONTENIDO_W = Emu(8229600)
+# Tamaño de slide 13.333in x 7.5in (16:9 estándar), igual al formato corporativo de JPV.
+SLIDE_W = Emu(12192000)
+SLIDE_H = Emu(6858000)
+MARGEN_X = Emu(609600)
+CONTENIDO_W = Emu(10972800)
 
-LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo_jpv_navy.png")
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+LOGO_PATH = os.path.join(_ASSETS_DIR, "logo_jpv_navy.png")
 LOGO_ASPECT = 1351 / 208  # ancho/alto del archivo real
+PLANTILLA_PATH = os.path.join(_ASSETS_DIR, "plantilla_jpv.pptx")
 
 
 def _rgb(hex_str):
@@ -64,7 +76,7 @@ def nueva_slide(prs):
 
 
 def barra(slide, y):
-    b = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, y, SLIDE_W, Emu(73152))
+    b = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, y, SLIDE_W, Emu(97536))
     b.fill.solid()
     b.fill.fore_color.rgb = _rgb(COLOR_BAR)
     _sin_borde(b)
@@ -86,7 +98,7 @@ def caja(slide, x, y, w, h, fill_hex=COLOR_CARD_BG, border_hex=COLOR_CARD_BORDER
 
 
 def texto(slide, x, y, w, h, contenido, size, color_hex, bold=False, italic=False,
-          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE, margenes=True, wrap=True):
+          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE, margenes=True, wrap=True, fuente=None):
     box = slide.shapes.add_textbox(x, y, w, h)
     tf = box.text_frame
     tf.word_wrap = wrap
@@ -103,25 +115,26 @@ def texto(slide, x, y, w, h, contenido, size, color_hex, bold=False, italic=Fals
         run.font.size = Pt(size)
         run.font.bold = bold
         run.font.italic = italic
-        run.font.name = FUENTE
+        run.font.name = fuente or FUENTE
         run.font.color.rgb = _rgb(color_hex)
     return box
 
 
 def pie_de_pagina(slide, fuente_texto):
     """Footer estándar de las slides de contenido: texto de fuente a la izquierda y logo a la derecha."""
-    texto(slide, MARGEN_X, Emu(4709160), Emu(7772400), Emu(164592),
-          fuente_texto, 8, COLOR_MUTED2, margenes=False)
-    alto_logo = Emu(164592)
+    texto(slide, MARGEN_X, Emu(6278880), Emu(10363200), Emu(219456),
+          fuente_texto, 9, COLOR_MUTED2, margenes=False)
+    alto_logo = Emu(219456)
     ancho_logo = Emu(int(alto_logo * LOGO_ASPECT))
-    x_logo = Emu(8503920 - ancho_logo)
+    x_logo = Emu(11338560 - ancho_logo)
     if os.path.exists(LOGO_PATH):
-        slide.shapes.add_picture(LOGO_PATH, x_logo, Emu(4709160), height=alto_logo)
+        slide.shapes.add_picture(LOGO_PATH, x_logo, Emu(6278880), height=alto_logo)
 
 
 def encabezado_slide(slide, titulo, subtitulo, color_subtitulo=COLOR_IE):
-    texto(slide, MARGEN_X, Emu(164592), CONTENIDO_W, Emu(384048), titulo, 17, COLOR_TEXTO)
-    texto(slide, MARGEN_X, Emu(548640), CONTENIDO_W, Emu(228600), subtitulo, 10.5, color_subtitulo, bold=True)
+    texto(slide, MARGEN_X, Emu(219456), CONTENIDO_W, Emu(512064), titulo, 24, COLOR_TITULO,
+          bold=True, fuente=FUENTE_TITULO)
+    texto(slide, MARGEN_X, Emu(731520), CONTENIDO_W, Emu(304800), subtitulo, 14, color_subtitulo, bold=True)
 
 
 def _fmt_uf(valor):
@@ -133,39 +146,131 @@ def _fmt_uf2(valor):
 
 
 # ---------------------------------------------------------
-# SLIDE 1 — PORTADA
+# Clonado de shapes desde la plantilla corporativa JPV (portada y cierre)
+# ---------------------------------------------------------
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_REL_HYPERLINK = _R_NS + "/hyperlink"
+
+
+def _remapear_relaciones_clon(el, part_origen, part_destino):
+    """Reasigna los r:embed/r:id de un elemento clonado a nuevas relaciones válidas en el
+    part de destino: las imágenes se copian tal cual, los hipervínculos externos se recrean."""
+    attr_embed, attr_link, attr_id = (f"{{{_R_NS}}}embed", f"{{{_R_NS}}}link", f"{{{_R_NS}}}id")
+    for nodo in el.iter():
+        for attr in (attr_embed, attr_link):
+            rid = nodo.get(attr)
+            if not rid:
+                continue
+            rel_origen = part_origen.rels.get(rid)
+            if rel_origen is None or rel_origen.is_external:
+                continue
+            _, nuevo_rid = part_destino.get_or_add_image_part(
+                _io_clon.BytesIO(rel_origen.target_part.blob)
+            )
+            nodo.set(attr, nuevo_rid)
+        rid = nodo.get(attr_id)
+        if not rid or rid not in part_origen.rels:
+            continue
+        rel_origen = part_origen.rels[rid]
+        if rel_origen.reltype == _REL_HYPERLINK and rel_origen.is_external:
+            nuevo_rid = part_destino.relate_to(rel_origen.target_ref, rel_origen.reltype, is_external=True)
+            nodo.set(attr_id, nuevo_rid)
+
+
+def clonar_shapes_de_plantilla(slide_destino, slide_origen):
+    """Copia todos los shapes (imágenes, grupos, formas libres, textos) de slide_origen a
+    slide_destino tal cual, remapeando relaciones de imagen/hipervínculo. Se usa para
+    reproducir 1:1 la portada y el cierre del formato corporativo de JPV."""
+    tree_destino = slide_destino.shapes._spTree
+    part_origen = slide_origen.part
+    part_destino = slide_destino.part
+    tags_shape = {qn("p:sp"), qn("p:pic"), qn("p:grpSp"), qn("p:graphicFrame"), qn("p:cxnSp")}
+    for el in list(slide_origen.shapes._spTree):
+        if el.tag not in tags_shape:
+            continue
+        nuevo_el = copy.deepcopy(el)
+        _remapear_relaciones_clon(nuevo_el, part_origen, part_destino)
+        tree_destino.append(nuevo_el)
+
+
+def _cargar_plantilla_jpv():
+    return Presentation(PLANTILLA_PATH) if os.path.exists(PLANTILLA_PATH) else None
+
+
+def _reemplazar_texto_clonado(slide, nombre_shape, lineas, size=None):
+    """Reemplaza el contenido de un shape de texto clonado (por nombre), conservando el
+    formato (fuente/color/negrita) del primer run original."""
+    shape = next((s for s in slide.shapes if s.name == nombre_shape), None)
+    if shape is None or not shape.has_text_frame:
+        return
+    tf = shape.text_frame
+    p0 = tf.paragraphs[0]
+    r0 = p0.runs[0] if p0.runs else None
+    fuente_run = r0.font.name if r0 and r0.font.name else FUENTE_TITULO
+    negrita = r0.font.bold if r0 else True
+    size_run = size or (r0.font.size if r0 and r0.font.size else Pt(24))
+    try:
+        color = r0.font.color.rgb if r0 and r0.font.color and r0.font.color.type is not None else None
+    except Exception:
+        color = None
+    if color is None:
+        color = _rgb("FFFFFF")
+
+    for p in list(tf.paragraphs)[1:]:
+        p._p.getparent().remove(p._p)
+    for run in list(p0.runs):
+        run._r.getparent().remove(run._r)
+
+    lineas = lineas if isinstance(lineas, list) else [lineas]
+    for i, linea in enumerate(lineas):
+        p = p0 if i == 0 else tf.add_paragraph()
+        run = p.add_run()
+        run.text = linea
+        run.font.name = fuente_run
+        run.font.size = size_run
+        run.font.bold = negrita
+        run.font.color.rgb = color
+
+
+# ---------------------------------------------------------
+# SLIDE 1 — PORTADA (clonada del formato corporativo JPV)
 # ---------------------------------------------------------
 def slide_portada(prs, datos):
-    slide = nueva_slide(prs)
-    barra(slide, 0)
-    barra(slide, Emu(4754880))
-
-    texto(slide, Emu(640080), Emu(1280160), Emu(7863840), Emu(640080),
-          "Ingeniería y Equipo Móvil", 42, COLOR_EM, bold=True)
-    texto(slide, Emu(640080), Emu(1920240), Emu(7863840), Emu(411480),
-          f"Línea Base {datos['anio']}: Ingeniería y Equipos Móviles", 20, COLOR_TEXTO)
-    texto(slide, Emu(640080), Emu(2423160), Emu(6000000), Emu(320040),
-          f"Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}", 16, COLOR_CTM, bold=True)
-
-    texto(slide, Emu(640080), Emu(4663440), Emu(4572000), Emu(182880),
-          datos['fecha_emision'], 10, COLOR_MUTED2)
-
-    # Logo más grande en la portada, apoyado justo sobre la barra inferior.
-    alto_logo = Emu(300000)
-    ancho_logo = Emu(int(alto_logo * LOGO_ASPECT))
-    x_logo = Emu(8503920 - ancho_logo)
-    y_logo = Emu(4754880 - 40000 - 300000)
-    if os.path.exists(LOGO_PATH):
-        slide.shapes.add_picture(LOGO_PATH, x_logo, y_logo, height=alto_logo)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    plantilla = _cargar_plantilla_jpv()
+    if plantilla is not None:
+        clonar_shapes_de_plantilla(slide, plantilla.slides[0])
+        _reemplazar_texto_clonado(slide, "CuadroTexto 9", [
+            "Línea Base Forecast",
+            f"Ingeniería y Equipo Móvil {datos['anio']}",
+            f"Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}",
+        ])
+        _reemplazar_texto_clonado(slide, "CuadroTexto 1", datos["fecha_emision"])
+    else:
+        # Respaldo si falta el asset de la plantilla (assets/plantilla_jpv.pptx).
+        fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
+        fondo.fill.solid()
+        fondo.fill.fore_color.rgb = _rgb(COLOR_BG)
+        _sin_borde(fondo)
+        fondo.shadow.inherit = False
+        barra(slide, 0)
+        barra(slide, Emu(6339840))
+        texto(slide, Emu(853440), Emu(1706880), Emu(10485120), Emu(853440),
+              "Ingeniería y Equipo Móvil", 42, COLOR_EM, bold=True, fuente=FUENTE_TITULO)
+        texto(slide, Emu(853440), Emu(2560320), Emu(10485120), Emu(548640),
+              f"Línea Base {datos['anio']}: Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}",
+              20, COLOR_TEXTO)
+        texto(slide, Emu(853440), Emu(6217920), Emu(6096000), Emu(243840),
+              datos["fecha_emision"], 10, COLOR_MUTED2)
     return slide
 
 
-# ---------------------------------------------------------
 # SLIDE 2 — AGENDA
 # ---------------------------------------------------------
 def slide_agenda(prs, datos):
     slide = nueva_slide(prs)
-    texto(slide, MARGEN_X, Emu(457200), CONTENIDO_W, Emu(457200), "Agenda", 28, COLOR_TEXTO, bold=True)
+    texto(slide, MARGEN_X, Emu(609600), CONTENIDO_W, Emu(609600), "Agenda", 36, COLOR_TITULO,
+          bold=True, fuente=FUENTE_TITULO)
 
     items = [
         f"Forecast {datos['label']} {datos['anio']}",
@@ -173,14 +278,14 @@ def slide_agenda(prs, datos):
         "La Mirada de la Industria",
         "Plan de Acción",
     ]
-    y = 1280160
+    y = 1706880
     for i, item in enumerate(items, start=1):
-        caja(slide, MARGEN_X, Emu(y), Emu(548640), Emu(548640), fill_hex=COLOR_CARD_BG, border_hex=None)
-        texto(slide, MARGEN_X, Emu(y), Emu(548640), Emu(548640), str(i), 22, COLOR_CTM, bold=True,
+        caja(slide, MARGEN_X, Emu(y), Emu(731520), Emu(731520), fill_hex=COLOR_CARD_BG, border_hex=None)
+        texto(slide, MARGEN_X, Emu(y), Emu(731520), Emu(731520), str(i), 29.5, COLOR_CTM, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(457200 + 640080), Emu(y), Emu(6400800), Emu(548640), item, 16, COLOR_TEXTO,
+        texto(slide, Emu(457200 + 640080), Emu(y), Emu(8534400), Emu(731520), item, 21.5, COLOR_TEXTO,
               margenes=False)
-        y += 640080
+        y += 853440
 
     pie_de_pagina(slide, "JPV Asociados | sedgwick.")
     return slide
@@ -191,11 +296,11 @@ def slide_agenda(prs, datos):
 # ---------------------------------------------------------
 def slide_titulo_seccion(prs, datos):
     slide = nueva_slide(prs)
-    texto(slide, Emu(640080), Emu(1920240), Emu(7863840), Emu(960120),
-          f"Forecast Financiero {datos['anio']}: Análisis de\nProducción y Facturación.",
-          28, COLOR_TEXTO, bold=True)
-    texto(slide, Emu(640080), Emu(2880360), Emu(7863840), Emu(411480),
-          "La Brecha del Forecast (La Realidad Incómoda)", 14, COLOR_MUTED)
+    texto(slide, Emu(853440), Emu(2560320), Emu(10485120), Emu(1280160),
+          [f"Forecast Financiero {datos['anio']}: Análisis de", "Producción y Facturación."],
+          36, COLOR_TITULO, bold=True, fuente=FUENTE_TITULO)
+    texto(slide, Emu(853440), Emu(3840480), Emu(10485120), Emu(548640),
+          "La Brecha del Forecast (La Realidad Incómoda)", 18.5, COLOR_MUTED)
     pie_de_pagina(slide, "JPV | sedgwick.")
     return slide
 
@@ -217,36 +322,36 @@ def slide_linea_base_real(prs, datos):
         ("Ingeniería y Energía", _fmt_uf2(datos['ie_ytd']) + " UF", f"{datos['nombre_mes_inicio']}–{datos['nombre_mes_corte']} {datos['anio']}"),
         ("Total Consolidado YTD", _fmt_uf2(datos['ytd_total']) + " UF", f"{datos['nombre_mes_inicio']}–{datos['nombre_mes_corte']} {datos['anio']}"),
     ]
-    x = 320040
+    x = 426720
     for titulo_t, valor_t, sub_t in tarjetas:
-        caja(slide, Emu(x), Emu(914400), Emu(2240280), Emu(960120))
-        texto(slide, Emu(x), Emu(969264), Emu(2240280), Emu(201168), titulo_t, 9, COLOR_MUTED,
+        caja(slide, Emu(x), Emu(1219200), Emu(2987040), Emu(1280160))
+        texto(slide, Emu(x), Emu(1292352), Emu(2987040), Emu(268224), titulo_t, 12.0, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(1170432), Emu(2240280), Emu(365760), valor_t, 20, COLOR_TEXTO, bold=True,
+        texto(slide, Emu(x), Emu(1560576), Emu(2987040), Emu(487680), valor_t, 26.5, COLOR_TEXTO, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(1536192), Emu(2240280), Emu(210312), sub_t, 8, COLOR_MUTED,
+        texto(slide, Emu(x), Emu(2048256), Emu(2987040), Emu(280416), sub_t, 10.5, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        x += 2240280 + 82296
+        x += 2987040 + 109728
 
-    x = 320040
+    x = 426720
     tarjetas2 = [
         ("Honorarios en Stock", _fmt_uf(datos['pipeline_bruto_total']) + " UF", "Pipeline bruto total " + str(datos['anio'])),
         ("Meta Anual", _fmt_uf(datos['meta']) + " UF", str(datos['anio'])),
     ]
     for titulo_t, valor_t, sub_t in tarjetas2:
-        caja(slide, Emu(x), Emu(2011680), Emu(2240280), Emu(960120))
-        texto(slide, Emu(x), Emu(2066544), Emu(2240280), Emu(201168), titulo_t, 9, COLOR_MUTED,
+        caja(slide, Emu(x), Emu(2682240), Emu(2987040), Emu(1280160))
+        texto(slide, Emu(x), Emu(2755392), Emu(2987040), Emu(268224), titulo_t, 12.0, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(2267712), Emu(2240280), Emu(365760), valor_t, 20, COLOR_TEXTO, bold=True,
+        texto(slide, Emu(x), Emu(3023616), Emu(2987040), Emu(487680), valor_t, 26.5, COLOR_TEXTO, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(2633472), Emu(2240280), Emu(210312), sub_t, 8, COLOR_MUTED,
+        texto(slide, Emu(x), Emu(3511296), Emu(2987040), Emu(280416), sub_t, 10.5, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        x += 2240280 + 82296
+        x += 2987040 + 109728
 
-    texto(slide, MARGEN_X, Emu(3200400), Emu(4000000), Emu(228600), "Análisis de contexto", 10.5, COLOR_IE, bold=True)
+    texto(slide, MARGEN_X, Emu(4267200), Emu(5333333), Emu(304800), "Análisis de contexto", 14.0, COLOR_IE, bold=True)
     bullets = [f"• {b}" for b in datos.get('bullets_linea_base', [])]
     if bullets:
-        texto(slide, MARGEN_X, Emu(3474720), Emu(8229600), Emu(457200), bullets, 9.5, COLOR_TEXTO, margenes=False)
+        texto(slide, MARGEN_X, Emu(4632960), Emu(10972800), Emu(609600), bullets, 12.5, COLOR_TEXTO, margenes=False)
 
     pie_de_pagina(slide, datos['fuente_texto'])
     return slide
@@ -265,31 +370,31 @@ def slide_proyeccion_pipeline(prs, datos):
     )
 
     proy_em = datos['proy_em']
-    caja(slide, Emu(320040), Emu(914400), Emu(4000000), Emu(1280160))
-    texto(slide, Emu(411480), Emu(969264), Emu(3800000), Emu(228600),
-          "Equipo Móvil (Pipeline Hon. Probables)", 10, COLOR_EM, bold=True, margenes=False)
-    texto(slide, Emu(411480), Emu(1234440), Emu(3800000), Emu(320040),
+    caja(slide, Emu(426720), Emu(1219200), Emu(5333333), Emu(1706880))
+    texto(slide, Emu(548640), Emu(1292352), Emu(5066667), Emu(304800),
+          "Equipo Móvil (Pipeline Hon. Probables)", 13.5, COLOR_EM, bold=True, margenes=False)
+    texto(slide, Emu(548640), Emu(1645920), Emu(5066667), Emu(426720),
           f"{_fmt_uf(proy_em['em_stock'])} UF (stock)  ·  {_fmt_uf(proy_em['em_promedio_total'])} UF (promedio × meses)",
-          13, COLOR_TEXTO, bold=True, margenes=False)
+          17.5, COLOR_TEXTO, bold=True, margenes=False)
     meses_txt = "-".join(m[:3] for m in proy_em['meses_usados']) or "—"
-    texto(slide, Emu(411480), Emu(1600200), Emu(3800000), Emu(457200),
+    texto(slide, Emu(548640), Emu(2133600), Emu(5066667), Emu(609600),
           f"Complemento EM — Promedio últimos {len(proy_em['meses_usados'])} meses\n"
           f"{_fmt_uf(proy_em['prom_em_3m'])} UF/mes ({meses_txt}) × {datos['meses_proyectados']} meses = {_fmt_uf(proy_em['em_promedio_total'])} UF",
-          9, COLOR_MUTED, margenes=False)
+          12.0, COLOR_MUTED, margenes=False)
 
     if datos['total_admin'] > 0:
-        caja(slide, Emu(4457700), Emu(914400), Emu(4051800), Emu(1280160), border_hex=COLOR_CTM)
-        texto(slide, Emu(4549140), Emu(969264), Emu(3800000), Emu(228600),
-              "Proceso Administrativo de Facturación", 10, COLOR_CTM, bold=True, margenes=False)
-        texto(slide, Emu(4549140), Emu(1234440), Emu(3800000), Emu(320040),
-              f"{_fmt_uf(datos['total_admin'])} UF", 18, COLOR_TEXTO, bold=True, margenes=False)
-        texto(slide, Emu(4549140), Emu(1600200), Emu(3800000), Emu(457200),
+        caja(slide, Emu(5943600), Emu(1219200), Emu(5402400), Emu(1706880), border_hex=COLOR_CTM)
+        texto(slide, Emu(6065520), Emu(1292352), Emu(5066667), Emu(304800),
+              "Proceso Administrativo de Facturación", 13.5, COLOR_CTM, bold=True, margenes=False)
+        texto(slide, Emu(6065520), Emu(1645920), Emu(5066667), Emu(426720),
+              f"{_fmt_uf(datos['total_admin'])} UF", 24.0, COLOR_TEXTO, bold=True, margenes=False)
+        texto(slide, Emu(6065520), Emu(2133600), Emu(5066667), Emu(609600),
               f"{len(datos['casos_admin'])} caso(s) en proceso administrativo",
-              9, COLOR_MUTED, margenes=False)
+              12.0, COLOR_MUTED, margenes=False)
 
     proy_ie = datos['proy_ie']
-    texto(slide, MARGEN_X, Emu(2377440), Emu(6000000), Emu(228600),
-          f"Ingeniería — Proyección {datos['nombre_mes_corte']}—Diciembre:", 10.5, COLOR_IE, bold=True)
+    texto(slide, MARGEN_X, Emu(3169920), Emu(8000000), Emu(304800),
+          f"Ingeniería — Proyección {datos['nombre_mes_corte']}—Diciembre:", 14.0, COLOR_IE, bold=True)
 
     ie_tarjetas = [
         ("Casos menores", "(<1.000 UF pérdida)", _fmt_uf(proy_ie['ie_menores_proj']) + " UF",
@@ -299,18 +404,18 @@ def slide_proyeccion_pipeline(prs, datos):
         ("Engie/CTM", "(pipeline, prob.)", _fmt_uf(proy_ie['ie_engie_proj']) + " UF",
          f"{proy_ie['n_casos_engie']} caso(s) · Hon. Probables ponderados"),
     ]
-    x = 320040
+    x = 426720
     for t1, t2, valor_t, sub_t in ie_tarjetas:
-        caja(slide, Emu(x), Emu(2743200), Emu(2606040), Emu(1097280))
-        texto(slide, Emu(x), Emu(2798064), Emu(2606040), Emu(180000), t1, 9.5, COLOR_MUTED, bold=True,
+        caja(slide, Emu(x), Emu(3657600), Emu(3474720), Emu(1463040))
+        texto(slide, Emu(x), Emu(3730752), Emu(3474720), Emu(240000), t1, 12.5, COLOR_MUTED, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(2978064), Emu(2606040), Emu(160000), t2, 8, COLOR_MUTED,
+        texto(slide, Emu(x), Emu(3970752), Emu(3474720), Emu(213333), t2, 10.5, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(3150000), Emu(2606040), Emu(320040), valor_t, 17, COLOR_TEXTO, bold=True,
+        texto(slide, Emu(x), Emu(4200000), Emu(3474720), Emu(426720), valor_t, 22.5, COLOR_TEXTO, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(3520000), Emu(2606040), Emu(280000), sub_t, 8, COLOR_MUTED,
+        texto(slide, Emu(x), Emu(4693333), Emu(3474720), Emu(373333), sub_t, 10.5, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        x += 2606040 + 55000
+        x += 3474720 + 73333
 
     pie_de_pagina(slide, datos['fuente_texto'])
     return slide
@@ -324,16 +429,16 @@ def slide_casos_admin(prs, datos):
     encabezado_slide(slide, "Casos en Proceso Administrativo de Facturación",
                       f"Total: {_fmt_uf(datos['total_admin'])} UF", COLOR_CTM)
 
-    y = 1097280
+    y = 1463040
     for caso in datos['casos_admin']:
-        caja(slide, MARGEN_X, Emu(y), CONTENIDO_W, Emu(457200))
-        texto(slide, Emu(457200 + 137160), Emu(y), Emu(6000000), Emu(457200),
-              caso['nombre'] or "(sin nombre)", 12, COLOR_TEXTO, margenes=False)
-        texto(slide, Emu(6800000), Emu(y), Emu(1372000), Emu(457200),
-              f"{_fmt_uf(caso['monto'])} UF", 13, COLOR_CTM, bold=True,
+        caja(slide, MARGEN_X, Emu(y), CONTENIDO_W, Emu(609600))
+        texto(slide, Emu(457200 + 137160), Emu(y), Emu(8000000), Emu(609600),
+              caso['nombre'] or "(sin nombre)", 16.0, COLOR_TEXTO, margenes=False)
+        texto(slide, Emu(9066667), Emu(y), Emu(1829333), Emu(609600),
+              f"{_fmt_uf(caso['monto'])} UF", 17.5, COLOR_CTM, bold=True,
               align=PP_ALIGN.RIGHT, margenes=False)
-        y += 502920
-        if y > 4200000:
+        y += 670560
+        if y > 5600000:
             break
 
     pie_de_pagina(slide, datos['fuente_texto'])
@@ -354,48 +459,48 @@ def slide_forecast_total(prs, datos):
         ("Ingeniería", COLOR_IE, _fmt_uf(datos['ie_total']) + " UF",
          f"{_fmt_uf2(datos['ie_ytd'])} YTD + {_fmt_uf(datos['ie_proyectado'])} proyectado"),
     ]
-    x = 320040
+    x = 426720
     for titulo_t, color_t, valor_t, sub_t in tarjetas:
-        caja(slide, Emu(x), Emu(1097280), Emu(2789555), Emu(1280160))
-        texto(slide, Emu(x + 91440), Emu(1152144), Emu(2600000), Emu(228600), titulo_t, 10.5, color_t, bold=True, margenes=False)
-        texto(slide, Emu(x + 91440), Emu(1417320), Emu(2600000), Emu(365760), valor_t, 22, COLOR_TEXTO, bold=True, margenes=False)
-        texto(slide, Emu(x + 91440), Emu(1783080), Emu(2600000), Emu(320040), sub_t, 9, COLOR_MUTED, margenes=False)
-        x += 2789555 + 91445
+        caja(slide, Emu(x), Emu(1463040), Emu(3719407), Emu(1706880))
+        texto(slide, Emu(x + 91440), Emu(1536192), Emu(3466667), Emu(304800), titulo_t, 14.0, color_t, bold=True, margenes=False)
+        texto(slide, Emu(x + 91440), Emu(1889760), Emu(3466667), Emu(487680), valor_t, 29.5, COLOR_TEXTO, bold=True, margenes=False)
+        texto(slide, Emu(x + 91440), Emu(2377440), Emu(3466667), Emu(426720), sub_t, 12.0, COLOR_MUTED, margenes=False)
+        x += 3719407 + 121927
 
     if datos['total_admin'] > 0:
-        caja(slide, Emu(x), Emu(1097280), Emu(2789555), Emu(1280160), border_hex=COLOR_CTM)
-        texto(slide, Emu(x + 91440), Emu(1152144), Emu(2600000), Emu(228600),
-              "Proceso Administrativo", 10.5, COLOR_CTM, bold=True, margenes=False)
-        texto(slide, Emu(x + 91440), Emu(1417320), Emu(2600000), Emu(365760),
-              _fmt_uf(datos['total_admin']) + " UF", 22, COLOR_TEXTO, bold=True, margenes=False)
-        texto(slide, Emu(x + 91440), Emu(1783080), Emu(2600000), Emu(320040),
-              "Cierre esperado próximas semanas", 9, COLOR_MUTED, margenes=False)
+        caja(slide, Emu(x), Emu(1463040), Emu(3719407), Emu(1706880), border_hex=COLOR_CTM)
+        texto(slide, Emu(x + 91440), Emu(1536192), Emu(3466667), Emu(304800),
+              "Proceso Administrativo", 14.0, COLOR_CTM, bold=True, margenes=False)
+        texto(slide, Emu(x + 91440), Emu(1889760), Emu(3466667), Emu(487680),
+              _fmt_uf(datos['total_admin']) + " UF", 29.5, COLOR_TEXTO, bold=True, margenes=False)
+        texto(slide, Emu(x + 91440), Emu(2377440), Emu(3466667), Emu(426720),
+              "Cierre esperado próximas semanas", 12.0, COLOR_MUTED, margenes=False)
 
-    texto(slide, MARGEN_X, Emu(2606040), Emu(6000000), Emu(228600),
-          "Cierre de año proyectado global", 12, COLOR_TEXTO, bold=True)
+    texto(slide, MARGEN_X, Emu(3474720), Emu(8000000), Emu(304800),
+          "Cierre de año proyectado global", 16.0, COLOR_TEXTO, bold=True)
 
     color_gap_sin = COLOR_VERDE if datos['cum_sin'] >= 100 else COLOR_EM
-    caja(slide, Emu(320040), Emu(2971800), Emu(3931920), Emu(1188720))
-    texto(slide, Emu(320040), Emu(3063240), Emu(3931920), Emu(365760),
-          _fmt_uf(datos['cierre_sin_admin']) + " UF", 22, COLOR_TEXTO, bold=True,
+    caja(slide, Emu(426720), Emu(3962400), Emu(5242560), Emu(1584960))
+    texto(slide, Emu(426720), Emu(4084320), Emu(5242560), Emu(487680),
+          _fmt_uf(datos['cierre_sin_admin']) + " UF", 29.5, COLOR_TEXTO, bold=True,
           align=PP_ALIGN.CENTER, margenes=False)
-    texto(slide, Emu(320040), Emu(3429000), Emu(3931920), Emu(228600),
-          f"Sin proceso administrativo · {datos['cum_sin']:.1f}% de la meta", 9.5, color_gap_sin,
+    texto(slide, Emu(426720), Emu(4572000), Emu(5242560), Emu(304800),
+          f"Sin proceso administrativo · {datos['cum_sin']:.1f}% de la meta", 12.5, color_gap_sin,
           align=PP_ALIGN.CENTER, margenes=False)
 
     if datos['total_admin'] > 0:
         color_gap_con = COLOR_VERDE if datos['cum_con'] >= 100 else COLOR_EM
-        caja(slide, Emu(4343400), Emu(2971800), Emu(3931920), Emu(1188720), border_hex=COLOR_CTM)
-        texto(slide, Emu(4343400), Emu(3063240), Emu(3931920), Emu(365760),
-              _fmt_uf(datos['cierre_con_admin']) + " UF", 22, COLOR_TEXTO, bold=True,
+        caja(slide, Emu(5791200), Emu(3962400), Emu(5242560), Emu(1584960), border_hex=COLOR_CTM)
+        texto(slide, Emu(5791200), Emu(4084320), Emu(5242560), Emu(487680),
+              _fmt_uf(datos['cierre_con_admin']) + " UF", 29.5, COLOR_TEXTO, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(4343400), Emu(3429000), Emu(3931920), Emu(228600),
-              f"Con proceso administrativo · {datos['cum_con']:.1f}% de la meta", 9.5, color_gap_con,
+        texto(slide, Emu(5791200), Emu(4572000), Emu(5242560), Emu(304800),
+              f"Con proceso administrativo · {datos['cum_con']:.1f}% de la meta", 12.5, color_gap_con,
               align=PP_ALIGN.CENTER, margenes=False)
 
-    texto(slide, MARGEN_X, Emu(4297680), CONTENIDO_W, Emu(228600),
+    texto(slide, MARGEN_X, Emu(5730240), CONTENIDO_W, Emu(304800),
           f"Honorarios en Stock: {_fmt_uf(datos['pipeline_bruto_total'])} UF no facturados en pipeline total (bruto, sin probabilidad)",
-          9, COLOR_MUTED)
+          12.0, COLOR_MUTED)
 
     pie_de_pagina(slide, datos['fuente_texto'])
     return slide
@@ -422,26 +527,26 @@ def slide_desviacion(prs, datos):
         ("Desviación (Gap)", f"{gap_ref:+,.0f}".replace(",", ".") + " UF",
          f"Cumplimiento: {cum_ref:.1f}%", color_gap),
     ]
-    x = 320040
+    x = 426720
     for titulo_t, valor_t, sub_t, color_t in etiquetas:
-        caja(slide, Emu(x), Emu(1005840), Emu(2606040), Emu(914400))
-        texto(slide, Emu(x), Emu(1060704), Emu(2606040), Emu(201168), titulo_t, 9, COLOR_MUTED,
+        caja(slide, Emu(x), Emu(1341120), Emu(3474720), Emu(1219200))
+        texto(slide, Emu(x), Emu(1414272), Emu(3474720), Emu(268224), titulo_t, 12.0, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(1261872), Emu(2606040), Emu(320040), valor_t, 18, color_t, bold=True,
+        texto(slide, Emu(x), Emu(1682496), Emu(3474720), Emu(426720), valor_t, 24.0, color_t, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
-        texto(slide, Emu(x), Emu(1600200), Emu(2606040), Emu(210312), sub_t, 8.5, COLOR_MUTED,
+        texto(slide, Emu(x), Emu(2133600), Emu(3474720), Emu(280416), sub_t, 11.5, COLOR_MUTED,
               align=PP_ALIGN.CENTER, margenes=False)
-        x += 2606040 + 55000
+        x += 3474720 + 73333
 
-    texto(slide, Emu(320040), Emu(2103120), Emu(3931920), Emu(228600),
-          "Acción Requerida: Equipo Móvil", 10.5, COLOR_EM, bold=True)
+    texto(slide, Emu(426720), Emu(2804160), Emu(5242560), Emu(304800),
+          "Acción Requerida: Equipo Móvil", 14.0, COLOR_EM, bold=True)
     bullets_em = [f"• {b}" for b in datos.get('bullets_accion_em', [])]
-    texto(slide, Emu(320040), Emu(2377440), Emu(3931920), Emu(1828800), bullets_em, 9, COLOR_TEXTO, margenes=False)
+    texto(slide, Emu(426720), Emu(3169920), Emu(5242560), Emu(2438400), bullets_em, 12.0, COLOR_TEXTO, margenes=False)
 
-    texto(slide, Emu(4457700), Emu(2103120), Emu(3931920), Emu(228600),
-          "Acción Requerida: Ingeniería", 10.5, COLOR_IE, bold=True)
+    texto(slide, Emu(5943600), Emu(2804160), Emu(5242560), Emu(304800),
+          "Acción Requerida: Ingeniería", 14.0, COLOR_IE, bold=True)
     bullets_ie = [f"• {b}" for b in datos.get('bullets_accion_ie', [])]
-    texto(slide, Emu(4457700), Emu(2377440), Emu(3931920), Emu(1828800), bullets_ie, 9, COLOR_TEXTO, margenes=False)
+    texto(slide, Emu(5943600), Emu(3169920), Emu(5242560), Emu(2438400), bullets_ie, 12.0, COLOR_TEXTO, margenes=False)
 
     pie_de_pagina(slide, datos['fuente_texto'])
     return slide
@@ -456,20 +561,20 @@ def _estilizar_chart(chart, mostrar_leyenda=True):
         chart.has_legend = True
         chart.legend.position = XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
-        chart.legend.font.size = Pt(9)
+        chart.legend.font.size = Pt(12)
         chart.legend.font.color.rgb = _rgb(COLOR_MUTED)
         chart.legend.font.name = FUENTE
     else:
         chart.has_legend = False
 
     cat_ax = chart.category_axis
-    cat_ax.tick_labels.font.size = Pt(9)
+    cat_ax.tick_labels.font.size = Pt(12)
     cat_ax.tick_labels.font.color.rgb = _rgb(COLOR_MUTED)
     cat_ax.tick_labels.font.name = FUENTE
     cat_ax.format.line.color.rgb = _rgb(COLOR_CARD_BORDER)
 
     val_ax = chart.value_axis
-    val_ax.tick_labels.font.size = Pt(9)
+    val_ax.tick_labels.font.size = Pt(12)
     val_ax.tick_labels.font.color.rgb = _rgb(COLOR_MUTED)
     val_ax.tick_labels.font.name = FUENTE
     val_ax.format.line.color.rgb = _rgb(COLOR_CARD_BORDER)
@@ -506,7 +611,7 @@ def slide_evolucion(prs, datos):
         chart_data.add_series('Proyección (con proc. admin.)', datos['grafico_proy_con'])
     chart_data.add_series('Meta', [datos['meta']] * len(datos['grafico_meses']))
 
-    x, y, cx, cy = Emu(457200), Emu(1005840), Emu(8229600), Emu(3474720)
+    x, y, cx, cy = Emu(609600), Emu(1341120), Emu(10972800), Emu(4632960)
     gf = slide.shapes.add_chart(XL_CHART_TYPE.LINE_MARKERS, x, y, cx, cy, chart_data)
     chart = gf.chart
     _estilizar_chart(chart)
@@ -539,8 +644,8 @@ def _tabla_casos(slide, x, y, cx, cy, columnas, filas, color_header_bg):
         cell = table.cell(r, c)
         cell.fill.solid()
         cell.fill.fore_color.rgb = _rgb(fondo_hex)
-        cell.margin_left = cell.margin_right = Emu(45720)
-        cell.margin_top = cell.margin_bottom = Emu(9144)
+        cell.margin_left = cell.margin_right = Emu(60960)
+        cell.margin_top = cell.margin_bottom = Emu(12192)
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
         tf = cell.text_frame
         tf.word_wrap = True
@@ -580,8 +685,8 @@ def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
 
     casos = datos.get(clave, [])
     if not casos:
-        texto(slide, MARGEN_X, Emu(1828800), CONTENIDO_W, Emu(457200),
-              "No hay casos que cumplan este criterio.", 12, COLOR_MUTED)
+        texto(slide, MARGEN_X, Emu(2438400), CONTENIDO_W, Emu(609600),
+              "No hay casos que cumplan este criterio.", 16.0, COLOR_MUTED)
     else:
         filas = [
             (
@@ -591,7 +696,7 @@ def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
             )
             for c in casos
         ]
-        _tabla_casos(slide, MARGEN_X, Emu(1005840), CONTENIDO_W, Emu(3600000),
+        _tabla_casos(slide, MARGEN_X, Emu(1341120), CONTENIDO_W, Emu(4800000),
                      _COLUMNAS_TOP10, filas, color_accent)
 
     pie_de_pagina(slide, datos['fuente_texto'])
@@ -611,13 +716,33 @@ def slide_facturacion_mensual(prs, datos):
     chart_data.add_series('Equipo Móvil', datos['valores_em_mensual'])
     chart_data.add_series('Ingeniería y Energía', datos['valores_ie_mensual'])
 
-    x, y, cx, cy = Emu(457200), Emu(1005840), Emu(8229600), Emu(3474720)
+    x, y, cx, cy = Emu(609600), Emu(1341120), Emu(10972800), Emu(4632960)
     gf = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, cx, cy, chart_data)
     chart = gf.chart
     _estilizar_chart(chart)
     _colorear_series(chart, [COLOR_EM, COLOR_IE])
 
     pie_de_pagina(slide, datos['fuente_texto'])
+    return slide
+
+
+# ---------------------------------------------------------
+# SLIDE — CIERRE (clonada del formato corporativo JPV)
+# ---------------------------------------------------------
+def slide_cierre(prs, datos):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    plantilla = _cargar_plantilla_jpv()
+    if plantilla is not None and len(plantilla.slides) > 1:
+        clonar_shapes_de_plantilla(slide, plantilla.slides[1])
+    else:
+        # Respaldo si falta el asset de la plantilla (assets/plantilla_jpv.pptx).
+        fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
+        fondo.fill.solid()
+        fondo.fill.fore_color.rgb = _rgb(COLOR_BAR)
+        _sin_borde(fondo)
+        fondo.shadow.inherit = False
+        texto(slide, MARGEN_X, Emu(3000000), CONTENIDO_W, Emu(800000),
+              "Gracias", 32, "FFFFFF", bold=True, align=PP_ALIGN.CENTER, fuente=FUENTE_TITULO)
     return slide
 
 
@@ -645,6 +770,7 @@ def generar_pptx_forecast(datos):
                             "Ordenados por Pérdida Bruta (mayor a menor)", COLOR_IE)
     slide_top_probabilidad(prs, datos, 'top10_menor50', "Top 10 — Casos con Probabilidad de Cierre < 50%",
                             "Ordenados por Pérdida Bruta (mayor a menor)", COLOR_ROJO)
+    slide_cierre(prs, datos)
 
     buffer = _io.BytesIO()
     prs.save(buffer)
