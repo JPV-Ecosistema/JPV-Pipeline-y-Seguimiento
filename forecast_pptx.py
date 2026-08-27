@@ -61,6 +61,16 @@ def _rgb(hex_str):
     return RGBColor.from_string(hex_str)
 
 
+def _tinte(hex_color, factor):
+    """Mezcla hex_color con blanco. factor=0 -> color original, factor=1 -> blanco puro.
+    Se usa para bandas de tablas y fondos suaves derivados de un color de acento."""
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    r = round(r + (255 - r) * factor)
+    g = round(g + (255 - g) * factor)
+    b = round(b + (255 - b) * factor)
+    return f"{r:02X}{g:02X}{b:02X}"
+
+
 def _sin_borde(shape):
     shape.line.fill.background()
 
@@ -68,10 +78,20 @@ def _sin_borde(shape):
 def nueva_slide(prs):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
-    fondo.fill.solid()
-    fondo.fill.fore_color.rgb = _rgb(COLOR_BG)
+    # Degradado sutil (en vez de blanco plano) para dar algo de profundidad al fondo.
+    fondo.fill.gradient()
+    stops = fondo.fill.gradient_stops
+    stops[0].color.rgb = _rgb(COLOR_CARD_BG)
+    stops[0].position = 0.0
+    stops[1].color.rgb = _rgb(COLOR_BG)
+    stops[1].position = 1.0
+    fondo.fill.gradient_angle = 115
     _sin_borde(fondo)
     fondo.shadow.inherit = False
+    # Barras finas arriba y abajo (mismo grosor que la portada) para dar un marco tipo
+    # "membrete" a cada slide de contenido, en vez de quedar flotando en blanco.
+    barra(slide, 0)
+    barra(slide, Emu(6760464))
     return slide
 
 
@@ -625,27 +645,57 @@ def slide_evolucion(prs, datos):
 # ---------------------------------------------------------
 # Helper — tabla nativa de casos (encabezado + filas alternadas)
 # ---------------------------------------------------------
-def _tabla_casos(slide, x, y, cx, cy, columnas, filas, color_header_bg):
-    """columnas: lista de (titulo, ancho_emu). filas: lista de tuplas de texto, mismo orden que columnas."""
+def _tabla_casos(slide, x, y, cx, cy_max, columnas, filas, color_header_bg, filas_max_diseno=10):
+    """columnas: lista de (titulo, ancho_emu), con anchos que deben sumar cx (si no
+    coinciden se reescalan proporcionalmente). filas: lista de tuplas de texto, mismo
+    orden que columnas. cy_max es el alto disponible para filas_max_diseno filas de
+    datos (el caso más grande, p.ej. un Top 10 completo) — el alto de fila se fija en
+    base a ese máximo y la tabla se dimensiona solo a las filas que realmente tiene, en
+    vez de estirarse a llenar cy_max cuando hay pocos casos. Se dibuja sobre una tarjeta
+    blanca con borde, para que se lea como un componente diseñado y no como una grilla
+    pegada de una planilla."""
     n_filas = len(filas) + 1
     n_cols = len(columnas)
-    gf = slide.shapes.add_table(n_filas, n_cols, x, y, cx, cy)
+
+    anchos = [ancho for _, ancho in columnas]
+    suma_anchos = sum(anchos)
+    if suma_anchos != int(cx):
+        anchos = [round(a / suma_anchos * int(cx)) for a in anchos]
+        anchos[-1] += int(cx) - sum(anchos)
+
+    peso_header = 1.3
+    alto_normal = int(int(cy_max) / (filas_max_diseno + peso_header))
+    alto_header = int(alto_normal * peso_header)
+    n_filas_cuerpo = n_filas - 1
+    alto_tabla = alto_header + n_filas_cuerpo * alto_normal
+
+    margen_card = Emu(27432)
+    caja(slide, Emu(int(x) - margen_card), Emu(int(y) - margen_card),
+         Emu(int(cx) + margen_card * 2), Emu(alto_tabla + margen_card * 2),
+         fill_hex=COLOR_BG, border_hex=COLOR_CARD_BORDER)
+
+    gf = slide.shapes.add_table(n_filas, n_cols, x, y, cx, Emu(alto_tabla))
     table = gf.table
     table.first_row = False
     table.horz_banding = False
 
-    for c, (_, ancho) in enumerate(columnas):
+    for c, ancho in enumerate(anchos):
         table.columns[c].width = Emu(ancho)
-    alto_fila = Emu(int(cy / n_filas))
-    for r in range(n_filas):
-        table.rows[r].height = alto_fila
+
+    table.rows[0].height = Emu(alto_header)
+    for r in range(1, n_filas):
+        table.rows[r].height = Emu(alto_normal)
+    gf.height = Emu(alto_tabla)
+
+    color_tinte_zebra = _tinte(color_header_bg, 0.90)
+    color_tinte_destacado = _tinte(color_header_bg, 0.78)
 
     def _celda(r, c, texto_valor, fondo_hex, color_hex, bold, align):
         cell = table.cell(r, c)
         cell.fill.solid()
         cell.fill.fore_color.rgb = _rgb(fondo_hex)
-        cell.margin_left = cell.margin_right = Emu(60960)
-        cell.margin_top = cell.margin_bottom = Emu(12192)
+        cell.margin_left = cell.margin_right = Emu(73152)
+        cell.margin_top = cell.margin_bottom = Emu(18288)
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
         tf = cell.text_frame
         tf.word_wrap = True
@@ -653,19 +703,23 @@ def _tabla_casos(slide, x, y, cx, cy, columnas, filas, color_header_bg):
         p.alignment = align
         run = p.add_run()
         run.text = str(texto_valor)
-        run.font.size = Pt(9.5 if r == 0 else 9)
+        run.font.size = Pt(11)
         run.font.bold = bold
         run.font.name = FUENTE
         run.font.color.rgb = _rgb(color_hex)
 
     for c, (titulo, _) in enumerate(columnas):
-        _celda(0, c, titulo, color_header_bg, "FFFFFF", True,
+        _celda(0, c, titulo.upper(), color_header_bg, "FFFFFF", True,
                PP_ALIGN.LEFT if c < 2 else PP_ALIGN.CENTER)
 
+    ultima_col = len(columnas) - 1
     for r, fila in enumerate(filas, start=1):
-        fondo = COLOR_BG if r % 2 == 1 else COLOR_CARD_BG
+        fondo_zebra = COLOR_BG if r % 2 == 1 else color_tinte_zebra
         for c, valor in enumerate(fila):
-            _celda(r, c, valor, fondo, COLOR_TEXTO, False,
+            es_destacada = c == ultima_col
+            fondo = color_tinte_destacado if es_destacada else fondo_zebra
+            color_texto = color_header_bg if es_destacada else COLOR_TEXTO
+            _celda(r, c, valor, fondo, color_texto, es_destacada,
                    PP_ALIGN.LEFT if c < 2 else PP_ALIGN.CENTER)
     return gf
 
@@ -674,8 +728,8 @@ def _tabla_casos(slide, x, y, cx, cy, columnas, filas, color_header_bg):
 # SLIDES — TOP 10 POR PROBABILIDAD DE CIERRE (ordenados por pérdida bruta)
 # ---------------------------------------------------------
 _COLUMNAS_TOP10 = [
-    ("N° Caso", 950000), ("Nickname", 2350000), ("División", 750000),
-    ("Ajustador", 1450000), ("Pérdida Bruta", 1750000), ("Prob.", 979600),
+    ("N° Caso", 1266667), ("Nickname", 3133333), ("División", 1000000),
+    ("Ajustador", 1933333), ("Pérdida Bruta", 2333333), ("Prob.", 1306134),
 ]
 
 
