@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.23.0"
+APP_VERSION = "1.23.1"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -453,10 +453,16 @@ def cargar_reporte_produccion_forecast(archivo, anio):
     df['_anio'] = df['Fecha factura'].dt.year
     df['_mes'] = df['Fecha factura'].dt.month
     df['_div'] = df['División'].apply(clasificar_division_forecast)
-    if 'Indemnización neta' in df.columns:
-        df['Indemnización neta'] = pd.to_numeric(df['Indemnización neta'], errors='coerce').fillna(0)
+    col_perdida = 'Perdida bruta (en moneda del caso)'
+    if col_perdida in df.columns:
+        df[col_perdida] = pd.to_numeric(df[col_perdida], errors='coerce').fillna(0)
     else:
-        df['Indemnización neta'] = 0
+        df[col_perdida] = 0
+        st.warning(
+            f"⚠️ El Reporte de Producción no tiene la columna '{col_perdida}': la "
+            "clasificación de casos IE menores/mayores del forecast quedará en 0 hasta "
+            "que se agregue esa columna al reporte."
+        )
     return df
 
 def calcular_ytd_forecast(df_reporte, anio, mes_corte):
@@ -488,7 +494,7 @@ def calcular_proyeccion_em_forecast(mensual, meses_proyectados, df_pipeline):
 
 def calcular_proyeccion_ie_forecast(df_ytd, meses_reales, meses_proyectados, df_pipeline):
     ie_ytd_df = df_ytd[df_ytd['_div'] == 'IE']
-    menores = ie_ytd_df[ie_ytd_df['Indemnización neta'] < 1000]
+    menores = ie_ytd_df[ie_ytd_df['Perdida bruta (en moneda del caso)'] < 1000]
     ie_menores_real = menores['Honorarios (UF)'].sum()
     prom_ie_menores = (ie_menores_real / meses_reales) if meses_reales else 0.0
     ie_menores_proj = prom_ie_menores * meses_proyectados
