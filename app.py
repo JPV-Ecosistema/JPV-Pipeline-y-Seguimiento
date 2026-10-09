@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.23.1"
+APP_VERSION = "1.24.0"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -333,13 +333,13 @@ def render_sidebar_version():
 
 # Columnas definitivas para el reporte de salida
 COLUMNAS_FINALES = [
-    'Número de caso', 'Número de siniestro', 'Nickname', 'División', 
-    'Compañía de seguros', 'Corredora', 'Ajustador senior', 'Asegurado', 
-    'Creado en', 'Divisa', 'Perdida bruta (en moneda del caso)', 
-    'Deducible (en moneda del caso)', 'Monto asegurado (en moneda del caso)', 
-    'Honorarios (UF)', 'Facturado', 'Último movimiento', 
-    'Contenido último movimiento', 'Probabilidad cierre 2026', 
-    'Indicación Probabilidad', 'Hon Probables 2026', 'Observaciones', 
+    'Número de caso', 'Número de siniestro', 'Nickname', 'División', 'Estado',
+    'Compañía de seguros', 'Corredora', 'Ajustador senior', 'Asegurado',
+    'Creado en', 'Divisa', 'Perdida bruta (en moneda del caso)',
+    'Deducible (en moneda del caso)', 'Monto asegurado (en moneda del caso)',
+    'Honorarios (UF)', 'Facturado', 'Último movimiento',
+    'Contenido último movimiento', 'Probabilidad cierre 2026',
+    'Indicación Probabilidad', 'Hon Probables 2026', 'Observaciones',
     'Fecha probable de facturación'
 ]
 
