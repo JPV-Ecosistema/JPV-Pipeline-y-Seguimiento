@@ -14,7 +14,7 @@ from forecast_pptx import generar_pptx_forecast
 
 # --- CONTROL DE VERSIONES ---
 # Incrementar APP_VERSION cada vez que se publique un cambio relevante en la app.
-APP_VERSION = "1.24.0"
+APP_VERSION = "1.24.1"
 
 def con_reintento(func, intentos=3, espera_inicial=1.5):
     """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota excedida).
@@ -343,6 +343,31 @@ COLUMNAS_FINALES = [
     'Fecha probable de facturación'
 ]
 
+def _convertir_fecha_excel(valor):
+    """Convierte un valor de fecha que puede venir como serial de Excel (número, tal como
+    lo entrega el Reporte de Acciones para 'Último movimiento'), texto o datetime, a un
+    objeto date de Python. Devuelve None si no se puede interpretar."""
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    try:
+        if pd.isna(valor):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, (int, float)):
+        try:
+            return (datetime(1899, 12, 30) + timedelta(days=float(valor))).date()
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if hasattr(valor, 'date') and not isinstance(valor, str):
+        return valor.date()
+    parsed = pd.to_datetime(valor, errors='coerce')
+    return parsed.date() if pd.notna(parsed) else None
+
 def generar_excel_pipeline(df):
     """Genera un Excel formateado (con semáforo de color según probabilidad) a partir de un
     DataFrame de casos. Reordena/selecciona siempre las columnas de COLUMNAS_FINALES, sin
@@ -351,6 +376,9 @@ def generar_excel_pipeline(df):
     buffer = io.BytesIO()
     df_excel = df[COLUMNAS_FINALES].copy()
     df_excel['Probabilidad cierre 2026'] = df_excel['Probabilidad cierre 2026'].astype(str).str.replace('%', '').astype(float) / 100
+    # 'Último movimiento' llega del Reporte de Acciones como serial de Excel (número),
+    # sin formato de fecha en el origen: se convierte para que se vea como fecha real.
+    df_excel['Último movimiento'] = df_excel['Último movimiento'].apply(_convertir_fecha_excel)
 
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         nombre_hoja_descarga = f"Casos {fecha_desc}"
@@ -358,11 +386,14 @@ def generar_excel_pipeline(df):
         workbook = writer.book
         worksheet = writer.sheets[nombre_hoja_descarga]
         formato_pct = workbook.add_format({'num_format': '0%'})
+        formato_fecha = workbook.add_format({'num_format': 'yyyy-mm-dd'})
         formato_verde = workbook.add_format({'bg_color': '#c6efce', 'font_color': '#006100'})
         formato_amarillo = workbook.add_format({'bg_color': '#ffeb9c', 'font_color': '#9c5700'})
         formato_rojo = workbook.add_format({'bg_color': '#ffc7ce', 'font_color': '#9c0006'})
         idx_prob = COLUMNAS_FINALES.index('Probabilidad cierre 2026')
         worksheet.set_column(idx_prob, idx_prob, 15, formato_pct)
+        idx_ultimo_mov = COLUMNAS_FINALES.index('Último movimiento')
+        worksheet.set_column(idx_ultimo_mov, idx_ultimo_mov, 15, formato_fecha)
         filas_totales = len(df_excel)
         worksheet.conditional_format(1, idx_prob, filas_totales, idx_prob,
                                      {'type': 'cell', 'criteria': '>=', 'value': 0.75, 'format': formato_verde})
