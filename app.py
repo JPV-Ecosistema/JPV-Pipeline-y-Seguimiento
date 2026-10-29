@@ -56,6 +56,17 @@ PROB_MAP = {
     "100%": "Cierta"
 }
 
+# Etapas del caso dentro de Ajuste/Análisis: el Pipeline es el único editor de este flag.
+# El Planificador Semanal solo lo lee (ver load_master_base / cargar_etapas_pipeline allá).
+ETAPAS_CASO = [
+    "A la espera de antecedentes",
+    "Antecedentes parcialmente recibidos",
+    "Antecedentes recibidos a la espera de ajuste",
+    "En ajuste",
+    "Ajuste realizado a la espera de aprobación",
+    "Ajuste Aprobado en elaboración de IFL",
+]
+
 # --- RESPALDO EN LA NUBE (Google Sheets vía cuenta de servicio) ---
 PERSISTENCE_DIR = "persistence"
 BACKUP_FILE = os.path.join(PERSISTENCE_DIR, "PIPELINE_BACKUP.json")
@@ -334,6 +345,7 @@ def render_sidebar_version():
 # Columnas definitivas para el reporte de salida
 COLUMNAS_FINALES = [
     'Número de caso', 'Número de siniestro', 'Nickname', 'División', 'Estado',
+    'Etapa del Caso',
     'Compañía de seguros', 'Corredora', 'Ajustador senior', 'Asegurado',
     'Creado en', 'Divisa', 'Perdida bruta (en moneda del caso)',
     'Deducible (en moneda del caso)', 'Monto asegurado (en moneda del caso)',
@@ -699,7 +711,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             df_hist[col_llave] = df_hist[col_llave].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
             # Preparar columnas de persistencia
-            cols_persistencia = [col_llave, 'Probabilidad cierre 2026', 'Observaciones', 'Fecha probable de facturación']
+            cols_persistencia = [col_llave, 'Probabilidad cierre 2026', 'Observaciones', 'Fecha probable de facturación', 'Etapa del Caso']
             for c in cols_persistencia:
                 if c not in df_hist.columns: df_hist[c] = ""
 
@@ -717,6 +729,8 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
             df_final['Probabilidad cierre 2026'] = df_final['Probabilidad cierre 2026'].apply(to_pct_str)
             df_final['Observaciones'] = df_final['Observaciones'].astype(str).replace(['nan', 'None', '<NA>'], '')
             df_final['Fecha probable de facturación'] = pd.to_datetime(df_final['Fecha probable de facturación'], errors='coerce').dt.date
+            df_final['Etapa del Caso'] = df_final['Etapa del Caso'].astype(str).replace(['nan', 'None', '<NA>'], '')
+            df_final.loc[~df_final['Etapa del Caso'].isin(ETAPAS_CASO), 'Etapa del Caso'] = ""
 
             for col in COLUMNAS_FINALES:
                 if col not in df_final.columns: df_final[col] = ""
@@ -857,15 +871,48 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                     df_styled,
                     column_config={
                         "Probabilidad cierre 2026": st.column_config.SelectboxColumn(
-                            "Probabilidad (%)", 
+                            "Probabilidad (%)",
                             options=["0%", "25%", "50%", "75%", "100%"]
                         ),
                         "Fecha probable de facturación": st.column_config.DateColumn("Fecha Fact."),
-                        "Observaciones": st.column_config.TextColumn("Observaciones", width="large")
+                        "Observaciones": st.column_config.TextColumn("Observaciones", width="large"),
+                        "Etapa del Caso": st.column_config.SelectboxColumn(
+                            "Etapa del Caso",
+                            options=[""] + ETAPAS_CASO,
+                            width="medium"
+                        )
                     },
-                    hide_index=True, 
+                    hide_index=True,
                     use_container_width=True
                 )
+
+                # --- ETAPA DEL CASO: requiere confirmación explícita antes de guardarse ---
+                # A diferencia de Probabilidad/Observaciones (que se guardan solas al editar),
+                # este flag lo lee el Planificador Semanal (solo lectura allá), así que para
+                # evitar cambios accidentales se pide confirmar antes de escribirlo en la nube.
+                etapa_previa = st.session_state['df_pipeline_activo'].set_index(col_llave)['Etapa del Caso']
+                etapa_nueva = df_editado.set_index(col_llave)['Etapa del Caso']
+                cambios_etapa = etapa_nueva[etapa_nueva != etapa_previa.reindex(etapa_nueva.index)]
+
+                if not cambios_etapa.empty:
+                    st.warning("⚠️ **Cambios de Etapa del Caso pendientes de confirmar:**")
+                    for caso_num, etapa_val in cambios_etapa.items():
+                        anterior = etapa_previa.get(caso_num, "") or "(sin etapa)"
+                        asegurado_fila = df_editado.loc[df_editado[col_llave] == caso_num, 'Asegurado']
+                        asegurado_txt = asegurado_fila.iloc[0] if not asegurado_fila.empty else ""
+                        st.markdown(f"- **[{caso_num}]** {asegurado_txt}: *{anterior}* → **{etapa_val or '(sin etapa)'}**")
+
+                    if st.button("✅ Confirmar cambio de Etapa del Caso", type="primary", key="btn_confirmar_etapa"):
+                        for caso_num in cambios_etapa.index:
+                            fila_actualizada = df_editado.loc[df_editado[col_llave] == caso_num].iloc[0].to_dict()
+                            guardar_caso_en_nube(fila_actualizada, col_llave=col_llave)
+                        st.session_state['df_pipeline_activo'] = df_editado.copy()
+                        st.success(f"Etapa actualizada en {len(cambios_etapa)} caso(s).")
+                        st.rerun()
+                    else:
+                        # Mientras no se confirme, el cambio de Etapa no se refleja en el
+                        # pipeline activo ni se guarda junto con el resto de los campos.
+                        df_editado['Etapa del Caso'] = df_editado[col_llave].map(etapa_previa).fillna("")
 
                 prob_num_final = df_editado['Probabilidad cierre 2026'].str.replace('%', '').astype(float) / 100
                 df_editado['Hon Probables 2026'] = df_editado['Honorarios (UF)'] * prob_num_final
@@ -1045,6 +1092,21 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                             index=idx_prob_actual
                         )
 
+                        etapa_actual = str(fila_caso.get('Etapa del Caso', '') or '')
+                        opciones_etapa = [""] + ETAPAS_CASO
+                        idx_etapa_actual = opciones_etapa.index(etapa_actual) if etapa_actual in opciones_etapa else 0
+                        nueva_etapa = st.selectbox(
+                            "Etapa del Caso",
+                            options=opciones_etapa,
+                            index=idx_etapa_actual,
+                            format_func=lambda x: x if x else "(sin etapa)"
+                        )
+                        if nueva_etapa != etapa_actual:
+                            st.warning(
+                                f"⚠️ Vas a cambiar la Etapa del Caso de **{etapa_actual or '(sin etapa)'}** "
+                                f"a **{nueva_etapa or '(sin etapa)'}**. Se aplicará al presionar «Guardar Seguimiento»."
+                            )
+
                         nueva_obs = st.text_area(
                             "Nueva Observación (obligatorio) *",
                             placeholder="Escribe aquí el estado actual del caso...",
@@ -1089,6 +1151,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                         df_temp.loc[mask, "Probabilidad cierre 2026"] = nueva_prob
                                         df_temp.loc[mask, "Indicación Probabilidad"] = PROB_MAP.get(nueva_prob, "")
                                         df_temp.loc[mask, "Hon Probables 2026"] = hon_probables_nuevo
+                                        df_temp.loc[mask, "Etapa del Caso"] = nueva_etapa
 
                                         st.session_state["df_pipeline_activo"] = df_temp
 
