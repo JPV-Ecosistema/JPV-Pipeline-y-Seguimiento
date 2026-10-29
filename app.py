@@ -1177,6 +1177,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
 
                 TAMANO_PAGINA_MASIVA = 10
                 OPCIONES_PROB_MASIVA = ["0%", "25%", "50%", "75%", "100%"]
+                OPCIONES_ETAPA_MASIVA = [""] + ETAPAS_CASO
 
                 def semaforo_emoji_masivo(prob):
                     if prob in ["75%", "100%"]:
@@ -1231,11 +1232,14 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                     caso_m = str(fila_m['Número de caso'])
                     prob_base_m = str(fila_m.get('Probabilidad cierre 2026', '0%'))
                     fecha_base_m = fecha_base_str_masivo(fila_m.get('Fecha probable de facturación', None))
+                    etapa_base_m = str(fila_m.get('Etapa del Caso', '') or '')
                     prob_actual_m = st.session_state.get(f"masiva_prob_{caso_m}_{epoch_masivo}", prob_base_m)
                     obs_actual_m = st.session_state.get(f"masiva_obs_{caso_m}_{epoch_masivo}", "")
                     fecha_widget_m = st.session_state.get(f"masiva_fecha_{caso_m}_{epoch_masivo}", None)
                     fecha_actual_m = fecha_widget_m.strftime("%Y-%m-%d") if fecha_widget_m else ""
-                    if prob_actual_m != prob_base_m or obs_actual_m.strip() != "" or fecha_actual_m != fecha_base_m:
+                    etapa_actual_m = st.session_state.get(f"masiva_etapa_{caso_m}_{epoch_masivo}", etapa_base_m)
+                    if (prob_actual_m != prob_base_m or obs_actual_m.strip() != "" or fecha_actual_m != fecha_base_m
+                            or etapa_actual_m != etapa_base_m):
                         casos_con_cambios_masivo.append(caso_m)
 
                 hay_cambios_pendientes_masivo = len(casos_con_cambios_masivo) > 0
@@ -1326,6 +1330,9 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                     obs_referencia_m = str(fila_m.get('Observaciones', '') or '').strip()
                     fecha_base_dt_m = pd.to_datetime(fila_m.get('Fecha probable de facturación', None), errors='coerce')
                     fecha_base_valor_m = fecha_base_dt_m.date() if pd.notna(fecha_base_dt_m) else None
+                    etapa_base_m = str(fila_m.get('Etapa del Caso', '') or '')
+                    if etapa_base_m not in OPCIONES_ETAPA_MASIVA:
+                        etapa_base_m = ""
 
                     try:
                         fecha_creacion_m = pd.to_datetime(fila_m.get('Creado en', ''), errors='coerce')
@@ -1339,7 +1346,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                         if con_cambios_m:
                             st.markdown("🔵 **Cambios sin guardar**")
 
-                        col_c1, col_c2, col_c3, col_c4, col_c5 = st.columns([2, 0.8, 1.6, 3, 1.6])
+                        col_c1, col_c2, col_c3, col_c4, col_c5, col_c6 = st.columns([1.8, 0.7, 1.4, 2.4, 1.3, 1.8])
                         with col_c1:
                             st.markdown(f"**{caso_m}**")
                             st.caption(str(fila_m.get('Asegurado', '')))
@@ -1369,6 +1376,17 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                 value=fecha_base_valor_m,
                                 key=f"masiva_fecha_{caso_m}_{epoch_masivo}"
                             )
+                        with col_c6:
+                            st.selectbox(
+                                "Etapa del Caso",
+                                options=OPCIONES_ETAPA_MASIVA,
+                                index=OPCIONES_ETAPA_MASIVA.index(etapa_base_m),
+                                key=f"masiva_etapa_{caso_m}_{epoch_masivo}",
+                                format_func=lambda x: x if x else "(sin etapa)"
+                            )
+                            etapa_actual_tarjeta_m = st.session_state.get(f"masiva_etapa_{caso_m}_{epoch_masivo}", etapa_base_m)
+                            if etapa_actual_tarjeta_m != etapa_base_m:
+                                st.caption(f"⚠️ {etapa_base_m or '(sin etapa)'} → {etapa_actual_tarjeta_m or '(sin etapa)'}")
 
                 if total_casos_masivo > 0:
                     st.markdown("---")
@@ -1424,6 +1442,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                     nueva_obs_m = st.session_state.get(f"masiva_obs_{caso_m}_{epoch_masivo}", "").strip()
                                     nueva_fecha_m = st.session_state.get(f"masiva_fecha_{caso_m}_{epoch_masivo}")
                                     fecha_str_m = nueva_fecha_m.strftime("%Y-%m-%d") if nueva_fecha_m else ""
+                                    nueva_etapa_m = st.session_state.get(f"masiva_etapa_{caso_m}_{epoch_masivo}", "")
 
                                     hon_uf_m = float(df_temp_masivo.loc[mask_m, "Honorarios (UF)"].iloc[0] or 0)
                                     prob_decimal_m = float(nueva_prob_m.replace("%", "")) / 100
@@ -1433,6 +1452,7 @@ if (df_nuevo_manual is not None or df_nube is not None) and (archivo_historial i
                                     df_temp_masivo.loc[mask_m, "Indicación Probabilidad"] = PROB_MAP.get(nueva_prob_m, "")
                                     df_temp_masivo.loc[mask_m, "Fecha probable de facturación"] = fecha_str_m
                                     df_temp_masivo.loc[mask_m, "Hon Probables 2026"] = hon_probables_m
+                                    df_temp_masivo.loc[mask_m, "Etapa del Caso"] = nueva_etapa_m
                                     if nueva_obs_m:
                                         df_temp_masivo.loc[mask_m, "Observaciones"] = f"[{timestamp_masivo}] {nueva_obs_m}"
 
