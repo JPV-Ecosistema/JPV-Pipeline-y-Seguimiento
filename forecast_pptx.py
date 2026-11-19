@@ -1,12 +1,18 @@
 """
 Generador de la presentación PPTX "Línea Base Forecast" (Ingeniería y Equipo Móvil).
 
-La portada y la slide de cierre se clonan 1:1 desde el formato corporativo de JPV
-(assets/plantilla_jpv.pptx, provisto por el usuario) — mismo fondo, logos y estilo,
-solo cambia el texto dinámico (título y fecha). El título de las demás slides usa la
-misma tipografía del formato (Arial Black, naranja de marca) que la slide interior de
-ese documento. El resto del contenido usa una paleta clara con foco en una idea por
-slide, buen contraste y tamaños de fuente legibles en pantalla grande.
+Usa directamente la plantilla corporativa de JPV (assets/plantilla_jpv.pptx, un .potx
+oficial con master + 10 layouts con nombre que el usuario compartió) como base de TODAS
+las presentaciones que genera la app: cada slide se crea a partir del layout que
+corresponde (Portada, Separador de sección, Solo encabezado, Cierre) y solo se completan
+sus placeholders de texto. El header (logo, barra navy, línea de acento), el fondo y el
+pie de página con el tagline de marca vienen heredados del layout — no se dibujan a mano.
+Los colores y tipografías (Cambria para títulos, Calibri para texto) salen del theme real
+de la plantilla ("JPV Asociados").
+
+El contenido de cada dashboard (tarjetas, tablas, gráficos) se sigue construyendo a mano
+con los helpers caja()/texto()/_tabla_casos(), dentro del área libre que deja el layout
+"7 Solo encabezado" entre su header y su footer.
 
 Fase 2: genera 15 slides (Portada, Agenda, Título sección, Línea Base Real, Proyección
 y Pipeline, Casos en Proceso Administrativo [si aplica], Forecast Total, Análisis de
@@ -16,45 +22,48 @@ Bruta segmentados por Probabilidad de Cierre [100%, 75% y menor a 50%], y Cierre
 Forecasts y Tabla Comparativa) llegan en la Fase 3, junto con la persistencia del
 historial.
 """
-import copy
-import io as _io_clon
 import os
 from pptx import Presentation
 from pptx.util import Emu, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
-from pptx.oxml.ns import qn
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 
-# --- Paleta clara con acentos de marca JPV (naranja de la plantilla corporativa) ---
-COLOR_BG = "FFFFFF"
-COLOR_BAR = "1A365D"
-COLOR_CARD_BG = "F5F7FA"
-COLOR_CARD_BORDER = "D9E0E8"
-COLOR_IE = "2B6CB0"
-COLOR_EM = "C05621"
-COLOR_CTM = "00796B"
+# --- Paleta real del theme "JPV Asociados" (extraída de la plantilla corporativa) ---
+COLOR_BG = "FFFFFF"           # blanco, usado para tarjetas y filas de tablas
+COLOR_CARD_BORDER = "C7D0DA"  # accent6
+COLOR_TEAL = "0D7377"         # accent1 — usado para Ingeniería/IE
+COLOR_TEAL2 = "10AA9E"        # accent2 — usado para Proceso Administrativo/Engie
+COLOR_GRIS_AZUL = "5B6B7F"    # accent4 — usado para Equipo Móvil/EM
+COLOR_TEXTO = "1B2A4B"        # dk1 — texto principal sobre fondo claro
+COLOR_MUTED = "5B6B7F"        # accent4 — texto secundario
+COLOR_MUTED2 = "6B7C93"       # texto terciario (fuente de datos)
 COLOR_VERDE = "2F855A"
 COLOR_ROJO = "C53030"
-COLOR_TEXTO = "1A202C"
-COLOR_MUTED = "718096"
-COLOR_MUTED2 = "4A5568"
-COLOR_TITULO = "FF9933"
 FUENTE = "Calibri"
-FUENTE_TITULO = "Arial Black"
+FUENTE_TITULO = "Cambria"
 
-# Tamaño de slide 13.333in x 7.5in (16:9 estándar), igual al formato corporativo de JPV.
+# Alias semánticos usados en las tarjetas/gráficos de cada división.
+COLOR_IE = COLOR_TEAL
+COLOR_EM = COLOR_GRIS_AZUL
+COLOR_CTM = COLOR_TEAL2
+
+# Tamaño de slide 13.333in x 7.5in (16:9 estándar) — igual al de la plantilla corporativa.
 SLIDE_W = Emu(12192000)
 SLIDE_H = Emu(6858000)
 MARGEN_X = Emu(609600)
 CONTENIDO_W = Emu(10972800)
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-LOGO_PATH = os.path.join(_ASSETS_DIR, "logo_jpv_navy.png")
-LOGO_ASPECT = 1351 / 208  # ancho/alto del archivo real
 PLANTILLA_PATH = os.path.join(_ASSETS_DIR, "plantilla_jpv.pptx")
+
+# Índices (orden lógico, no de archivo) de los layouts de la plantilla que se usan acá.
+LAYOUT_PORTADA = 1
+LAYOUT_SEPARADOR = 2
+LAYOUT_CONTENIDO = 7
+LAYOUT_CIERRE = 9
 
 
 def _rgb(hex_str):
@@ -75,50 +84,50 @@ def _sin_borde(shape):
     shape.line.fill.background()
 
 
-def nueva_slide(prs, es_avance=False):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
-    # Degradado sutil (en vez de blanco plano) para dar algo de profundidad al fondo.
-    fondo.fill.gradient()
-    stops = fondo.fill.gradient_stops
-    stops[0].color.rgb = _rgb(COLOR_CARD_BG)
-    stops[0].position = 0.0
-    stops[1].color.rgb = _rgb(COLOR_BG)
-    stops[1].position = 1.0
-    fondo.fill.gradient_angle = 115
-    _sin_borde(fondo)
-    fondo.shadow.inherit = False
-    # Barras finas arriba y abajo (mismo grosor que la portada) para dar un marco tipo
-    # "membrete" a cada slide de contenido, en vez de quedar flotando en blanco.
-    barra(slide, 0)
-    barra(slide, Emu(6760464))
-    if es_avance:
-        sello_avance(slide)
-    return slide
+def _cargar_plantilla():
+    if not os.path.exists(PLANTILLA_PATH):
+        raise FileNotFoundError(
+            f"No se encontró la plantilla corporativa en {PLANTILLA_PATH}. "
+            "Todas las slides se generan a partir de ese archivo — sin él no se puede "
+            "construir la presentación."
+        )
+    return Presentation(PLANTILLA_PATH)
 
 
-def sello_avance(slide):
-    """Sello 'AVANCE' en la esquina superior derecha: se repite en todas las slides de
-    contenido cuando el forecast se emite con el mes en curso todavía sin cerrar, para
-    que quede inconfundible que no es el forecast oficial. encabezado_slide() reserva
-    el ancho de este espacio para que nunca se superponga con el título."""
-    ancho, alto = Emu(1920240), Emu(384048)
-    x, y = Emu(int(SLIDE_W) - int(ancho) - 137160), Emu(137160)
-    caja(slide, x, y, ancho, alto, fill_hex=COLOR_ROJO, border_hex=None)
-    texto(slide, x, y, ancho, alto, ["AVANCE", "Datos preliminares"], 10, "FFFFFF",
-          bold=True, align=PP_ALIGN.CENTER, margenes=False)
+def _eliminar_slide(prs, indice):
+    """Quita una slide de la presentación (python-pptx no trae este método)."""
+    xml_slides = prs.slides._sldIdLst
+    slides = list(xml_slides)
+    rId = slides[indice].rId
+    prs.part.drop_rel(rId)
+    xml_slides.remove(slides[indice])
 
 
-def barra(slide, y):
-    b = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, y, SLIDE_W, Emu(97536))
-    b.fill.solid()
-    b.fill.fore_color.rgb = _rgb(COLOR_BAR)
-    _sin_borde(b)
-    b.shadow.inherit = False
-    return b
+def _texto_run(run, texto_valor, size=None, bold=None, italic=None, color_hex=None):
+    """Sobrescribe solo los atributos indicados de un run (el resto queda heredado del
+    layout, p.ej. fuente y alineación), para no perder el estilo oficial de un placeholder."""
+    run.text = texto_valor
+    if size is not None:
+        run.font.size = Pt(size)
+    if bold is not None:
+        run.font.bold = bold
+    if italic is not None:
+        run.font.italic = italic
+    if color_hex is not None:
+        run.font.color.rgb = _rgb(color_hex)
 
 
-def caja(slide, x, y, w, h, fill_hex=COLOR_CARD_BG, border_hex=COLOR_CARD_BORDER):
+def _set_placeholder(slide, idx, texto_valor, **kw):
+    """Escribe texto en el placeholder idx de la slide, heredando el estilo del layout
+    (fuente/tamaño/color) salvo los atributos que se pasen explícitamente en kw."""
+    ph = slide.placeholders[idx]
+    ph.text_frame.clear()
+    run = ph.text_frame.paragraphs[0].add_run()
+    _texto_run(run, texto_valor, **kw)
+    return ph
+
+
+def caja(slide, x, y, w, h, fill_hex=COLOR_BG, border_hex=COLOR_CARD_BORDER):
     c = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, w, h)
     c.fill.solid()
     c.fill.fore_color.rgb = _rgb(fill_hex)
@@ -154,24 +163,30 @@ def texto(slide, x, y, w, h, contenido, size, color_hex, bold=False, italic=Fals
     return box
 
 
-def pie_de_pagina(slide, fuente_texto):
-    """Footer estándar de las slides de contenido: texto de fuente a la izquierda y logo a la derecha."""
-    texto(slide, MARGEN_X, Emu(6278880), Emu(10363200), Emu(219456),
+def fuente_slide(slide, fuente_texto):
+    """Línea pequeña con la fuente de datos, justo sobre el pie de página de la plantilla
+    (que ya trae el tagline de marca y el número de slide heredados del layout)."""
+    texto(slide, MARGEN_X, Emu(6185280), CONTENIDO_W, Emu(228600),
           fuente_texto, 9, COLOR_MUTED2, margenes=False)
-    alto_logo = Emu(219456)
-    ancho_logo = Emu(int(alto_logo * LOGO_ASPECT))
-    x_logo = Emu(11338560 - ancho_logo)
-    if os.path.exists(LOGO_PATH):
-        slide.shapes.add_picture(LOGO_PATH, x_logo, Emu(6278880), height=alto_logo)
 
 
-def encabezado_slide(slide, titulo, subtitulo, color_subtitulo=COLOR_IE):
-    # Ancho reservado (en vez de CONTENIDO_W completo) para dejar libre la esquina
-    # superior derecha, donde va el sello "AVANCE" cuando corresponde.
-    ancho_titulo = Emu(9342120)
-    texto(slide, MARGEN_X, Emu(219456), ancho_titulo, Emu(512064), titulo, 24, COLOR_TITULO,
-          bold=True, fuente=FUENTE_TITULO)
-    texto(slide, MARGEN_X, Emu(731520), ancho_titulo, Emu(304800), subtitulo, 14, color_subtitulo, bold=True)
+def nueva_slide(prs, titulo, es_avance=False, etiqueta=None):
+    """Crea una slide a partir del layout 'Solo encabezado' de la plantilla: el header
+    (logo, barra navy, línea de acento) y el pie de página (tagline + número de slide)
+    quedan heredados automáticamente del layout, acá solo se completa el título y,
+    opcionalmente, la etiqueta de la esquina superior derecha."""
+    layout = prs.slide_layouts[LAYOUT_CONTENIDO]
+    slide = prs.slides.add_slide(layout)
+    _set_placeholder(slide, 105, titulo)
+    if es_avance:
+        _set_placeholder(slide, 106, "AVANCE", bold=True, italic=False, color_hex=COLOR_ROJO)
+    elif etiqueta:
+        _set_placeholder(slide, 106, etiqueta)
+    return slide
+
+
+def subtitulo_slide(slide, texto_sub, color_hex=COLOR_TEAL):
+    texto(slide, MARGEN_X, Emu(975360), CONTENIDO_W, Emu(228600), texto_sub, 14, color_hex, bold=True)
 
 
 def _fmt_uf(valor):
@@ -183,137 +198,32 @@ def _fmt_uf2(valor):
 
 
 # ---------------------------------------------------------
-# Clonado de shapes desde la plantilla corporativa JPV (portada y cierre)
-# ---------------------------------------------------------
-_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-_REL_HYPERLINK = _R_NS + "/hyperlink"
-
-
-def _remapear_relaciones_clon(el, part_origen, part_destino):
-    """Reasigna los r:embed/r:id de un elemento clonado a nuevas relaciones válidas en el
-    part de destino: las imágenes se copian tal cual, los hipervínculos externos se recrean."""
-    attr_embed, attr_link, attr_id = (f"{{{_R_NS}}}embed", f"{{{_R_NS}}}link", f"{{{_R_NS}}}id")
-    for nodo in el.iter():
-        for attr in (attr_embed, attr_link):
-            rid = nodo.get(attr)
-            if not rid:
-                continue
-            rel_origen = part_origen.rels.get(rid)
-            if rel_origen is None or rel_origen.is_external:
-                continue
-            _, nuevo_rid = part_destino.get_or_add_image_part(
-                _io_clon.BytesIO(rel_origen.target_part.blob)
-            )
-            nodo.set(attr, nuevo_rid)
-        rid = nodo.get(attr_id)
-        if not rid or rid not in part_origen.rels:
-            continue
-        rel_origen = part_origen.rels[rid]
-        if rel_origen.reltype == _REL_HYPERLINK and rel_origen.is_external:
-            nuevo_rid = part_destino.relate_to(rel_origen.target_ref, rel_origen.reltype, is_external=True)
-            nodo.set(attr_id, nuevo_rid)
-
-
-def clonar_shapes_de_plantilla(slide_destino, slide_origen):
-    """Copia todos los shapes (imágenes, grupos, formas libres, textos) de slide_origen a
-    slide_destino tal cual, remapeando relaciones de imagen/hipervínculo. Se usa para
-    reproducir 1:1 la portada y el cierre del formato corporativo de JPV."""
-    tree_destino = slide_destino.shapes._spTree
-    part_origen = slide_origen.part
-    part_destino = slide_destino.part
-    tags_shape = {qn("p:sp"), qn("p:pic"), qn("p:grpSp"), qn("p:graphicFrame"), qn("p:cxnSp")}
-    for el in list(slide_origen.shapes._spTree):
-        if el.tag not in tags_shape:
-            continue
-        nuevo_el = copy.deepcopy(el)
-        _remapear_relaciones_clon(nuevo_el, part_origen, part_destino)
-        tree_destino.append(nuevo_el)
-
-
-def _cargar_plantilla_jpv():
-    return Presentation(PLANTILLA_PATH) if os.path.exists(PLANTILLA_PATH) else None
-
-
-def _reemplazar_texto_clonado(slide, nombre_shape, lineas, size=None):
-    """Reemplaza el contenido de un shape de texto clonado (por nombre), conservando el
-    formato (fuente/color/negrita) del primer run original."""
-    shape = next((s for s in slide.shapes if s.name == nombre_shape), None)
-    if shape is None or not shape.has_text_frame:
-        return
-    tf = shape.text_frame
-    p0 = tf.paragraphs[0]
-    r0 = p0.runs[0] if p0.runs else None
-    fuente_run = r0.font.name if r0 and r0.font.name else FUENTE_TITULO
-    negrita = r0.font.bold if r0 else True
-    size_run = size or (r0.font.size if r0 and r0.font.size else Pt(24))
-    try:
-        color = r0.font.color.rgb if r0 and r0.font.color and r0.font.color.type is not None else None
-    except Exception:
-        color = None
-    if color is None:
-        color = _rgb("FFFFFF")
-
-    for p in list(tf.paragraphs)[1:]:
-        p._p.getparent().remove(p._p)
-    for run in list(p0.runs):
-        run._r.getparent().remove(run._r)
-
-    lineas = lineas if isinstance(lineas, list) else [lineas]
-    for i, linea in enumerate(lineas):
-        p = p0 if i == 0 else tf.add_paragraph()
-        run = p.add_run()
-        run.text = linea
-        run.font.name = fuente_run
-        run.font.size = size_run
-        run.font.bold = negrita
-        run.font.color.rgb = color
-
-
-# ---------------------------------------------------------
-# SLIDE 1 — PORTADA (clonada del formato corporativo JPV)
+# SLIDE — PORTADA (layout "1 Portada" de la plantilla)
 # ---------------------------------------------------------
 def slide_portada(prs, datos):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    layout = prs.slide_layouts[LAYOUT_PORTADA]
+    slide = prs.slides.add_slide(layout)
     es_avance = datos.get("es_avance", False)
-    subtitulo_forecast = f"Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}"
+
+    antetitulo = "LÍNEA BASE FORECAST"
     if es_avance:
-        subtitulo_forecast = "AVANCE — " + subtitulo_forecast
-    plantilla = _cargar_plantilla_jpv()
-    if plantilla is not None:
-        clonar_shapes_de_plantilla(slide, plantilla.slides[0])
-        _reemplazar_texto_clonado(slide, "CuadroTexto 9", [
-            "Línea Base Forecast",
-            f"Ingeniería y Equipo Móvil {datos['anio']}",
-            subtitulo_forecast,
-        ])
-        _reemplazar_texto_clonado(slide, "CuadroTexto 1", datos["fecha_emision"])
+        antetitulo = "AVANCE — " + antetitulo
+        _set_placeholder(slide, 104, antetitulo, color_hex=COLOR_ROJO)
     else:
-        # Respaldo si falta el asset de la plantilla (assets/plantilla_jpv.pptx).
-        fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
-        fondo.fill.solid()
-        fondo.fill.fore_color.rgb = _rgb(COLOR_BG)
-        _sin_borde(fondo)
-        fondo.shadow.inherit = False
-        barra(slide, 0)
-        barra(slide, Emu(6339840))
-        texto(slide, Emu(853440), Emu(1706880), Emu(10485120), Emu(853440),
-              "Ingeniería y Equipo Móvil", 42, COLOR_EM, bold=True, fuente=FUENTE_TITULO)
-        texto(slide, Emu(853440), Emu(2560320), Emu(10485120), Emu(548640),
-              f"Línea Base {datos['anio']}: {subtitulo_forecast}",
-              20, COLOR_TEXTO)
-        texto(slide, Emu(853440), Emu(6217920), Emu(6096000), Emu(243840),
-              datos["fecha_emision"], 10, COLOR_MUTED2)
-    if es_avance:
-        sello_avance(slide)
+        _set_placeholder(slide, 104, antetitulo)
+
+    _set_placeholder(slide, 105, f"Ingeniería y Equipo Móvil {datos['anio']}")
+    _set_placeholder(slide, 106, f"Forecast {datos['label']} — {datos['nombre_mes_corte']} {datos['anio']}")
+    _set_placeholder(slide, 108, "JPV Asociados")
+    _set_placeholder(slide, 109, datos["fecha_emision"])
     return slide
 
 
-# SLIDE 2 — AGENDA
+# ---------------------------------------------------------
+# SLIDE — AGENDA
 # ---------------------------------------------------------
 def slide_agenda(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    texto(slide, MARGEN_X, Emu(609600), CONTENIDO_W, Emu(609600), "Agenda", 36, COLOR_TITULO,
-          bold=True, fuente=FUENTE_TITULO)
+    slide = nueva_slide(prs, "Agenda", datos.get("es_avance", False))
 
     items = [
         f"Forecast {datos['label']} {datos['anio']}",
@@ -321,44 +231,39 @@ def slide_agenda(prs, datos):
         "La Mirada de la Industria",
         "Plan de Acción",
     ]
-    y = 1706880
+    y = 1219200
     for i, item in enumerate(items, start=1):
-        caja(slide, MARGEN_X, Emu(y), Emu(731520), Emu(731520), fill_hex=COLOR_CARD_BG, border_hex=None)
-        texto(slide, MARGEN_X, Emu(y), Emu(731520), Emu(731520), str(i), 29.5, COLOR_CTM, bold=True,
+        caja(slide, MARGEN_X, Emu(y), Emu(731520), Emu(731520), fill_hex=_tinte(COLOR_TEAL, 0.90), border_hex=None)
+        texto(slide, MARGEN_X, Emu(y), Emu(731520), Emu(731520), str(i), 29.5, COLOR_TEAL, bold=True,
               align=PP_ALIGN.CENTER, margenes=False)
         texto(slide, Emu(457200 + 640080), Emu(y), Emu(8534400), Emu(731520), item, 21.5, COLOR_TEXTO,
               margenes=False)
         y += 853440
 
-    pie_de_pagina(slide, "JPV Asociados | sedgwick.")
+    fuente_slide(slide, "JPV Asociados · Sedgwick Alliance")
     return slide
 
 
 # ---------------------------------------------------------
-# SLIDE 3 — TÍTULO DE SECCIÓN
+# SLIDE — TÍTULO DE SECCIÓN (layout "2 Separador de sección")
 # ---------------------------------------------------------
 def slide_titulo_seccion(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    texto(slide, Emu(853440), Emu(2560320), Emu(10485120), Emu(1280160),
-          [f"Forecast Financiero {datos['anio']}: Análisis de", "Producción y Facturación."],
-          36, COLOR_TITULO, bold=True, fuente=FUENTE_TITULO)
-    texto(slide, Emu(853440), Emu(3840480), Emu(10485120), Emu(548640),
-          "La Brecha del Forecast (La Realidad Incómoda)", 18.5, COLOR_MUTED)
-    pie_de_pagina(slide, "JPV | sedgwick.")
+    layout = prs.slide_layouts[LAYOUT_SEPARADOR]
+    slide = prs.slides.add_slide(layout)
+    _set_placeholder(slide, 105, f"Forecast {datos['label']} {datos['anio']}")
+    if datos.get("es_avance"):
+        _set_placeholder(slide, 106, "AVANCE", bold=True, italic=False, color_hex=COLOR_ROJO)
+    _set_placeholder(slide, 108, f"Forecast Financiero {datos['anio']}: Análisis de Producción y Facturación")
+    _set_placeholder(slide, 109, "La Brecha del Forecast (La Realidad Incómoda)")
     return slide
 
 
 # ---------------------------------------------------------
-# SLIDE 4 — LÍNEA BASE REAL
+# SLIDE — LÍNEA BASE REAL
 # ---------------------------------------------------------
 def slide_linea_base_real(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(
-        slide,
-        "1. Línea Base Real (Cierre Facturación)",
-        f"Estado Actual (YTD {datos['nombre_mes_inicio']} a {datos['nombre_mes_corte']})",
-        COLOR_IE,
-    )
+    slide = nueva_slide(prs, "1. Línea Base Real (Cierre Facturación)", datos.get("es_avance", False))
+    subtitulo_slide(slide, f"Estado Actual (YTD {datos['nombre_mes_inicio']} a {datos['nombre_mes_corte']})")
 
     tarjetas = [
         ("Equipo Móvil", _fmt_uf2(datos['em_ytd']) + " UF", f"{datos['nombre_mes_inicio']}–{datos['nombre_mes_corte']} {datos['anio']}"),
@@ -391,26 +296,21 @@ def slide_linea_base_real(prs, datos):
               align=PP_ALIGN.CENTER, margenes=False)
         x += 2987040 + 109728
 
-    texto(slide, MARGEN_X, Emu(4267200), Emu(5333333), Emu(304800), "Análisis de contexto", 14.0, COLOR_IE, bold=True)
+    texto(slide, MARGEN_X, Emu(4267200), Emu(5333333), Emu(304800), "Análisis de contexto", 14.0, COLOR_TEAL, bold=True)
     bullets = [f"• {b}" for b in datos.get('bullets_linea_base', [])]
     if bullets:
         texto(slide, MARGEN_X, Emu(4632960), Emu(10972800), Emu(609600), bullets, 12.5, COLOR_TEXTO, margenes=False)
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
 # ---------------------------------------------------------
-# SLIDE 5 — PROYECCIÓN Y PIPELINE
+# SLIDE — PROYECCIÓN Y PIPELINE
 # ---------------------------------------------------------
 def slide_proyeccion_pipeline(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(
-        slide,
-        f"2. Proyección y Pipeline {datos['label']} (Resto del año)",
-        f"Proyección (Forecast {datos['nombre_mes_corte']}—Diciembre)",
-        COLOR_IE,
-    )
+    slide = nueva_slide(prs, f"2. Proyección y Pipeline {datos['label']} (Resto del año)", datos.get("es_avance", False))
+    subtitulo_slide(slide, f"Proyección (Forecast {datos['nombre_mes_corte']}—Diciembre)")
 
     proy_em = datos['proy_em']
     caja(slide, Emu(426720), Emu(1219200), Emu(5333333), Emu(1706880))
@@ -460,7 +360,7 @@ def slide_proyeccion_pipeline(prs, datos):
               align=PP_ALIGN.CENTER, margenes=False)
         x += 3474720 + 73333
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
@@ -468,11 +368,10 @@ def slide_proyeccion_pipeline(prs, datos):
 # SLIDE — CASOS EN PROCESO ADMINISTRATIVO (condicional)
 # ---------------------------------------------------------
 def slide_casos_admin(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(slide, "Casos en Proceso Administrativo de Facturación",
-                      f"Total: {_fmt_uf(datos['total_admin'])} UF", COLOR_CTM)
+    slide = nueva_slide(prs, "Casos en Proceso Administrativo de Facturación", datos.get("es_avance", False))
+    subtitulo_slide(slide, f"Total: {_fmt_uf(datos['total_admin'])} UF", color_hex=COLOR_CTM)
 
-    y = 1463040
+    y = 1219200
     for caso in datos['casos_admin']:
         caja(slide, MARGEN_X, Emu(y), CONTENIDO_W, Emu(609600))
         texto(slide, Emu(457200 + 137160), Emu(y), Emu(8000000), Emu(609600),
@@ -484,7 +383,7 @@ def slide_casos_admin(prs, datos):
         if y > 5600000:
             break
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
@@ -492,9 +391,8 @@ def slide_casos_admin(prs, datos):
 # SLIDE — FORECAST TOTAL
 # ---------------------------------------------------------
 def slide_forecast_total(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(slide, f"2. Forecast {datos['label']} (Total año {datos['anio']})",
-                      f"Proyección (Forecast {datos['nombre_mes_corte']}—Diciembre)", COLOR_IE)
+    slide = nueva_slide(prs, f"2. Forecast {datos['label']} (Total año {datos['anio']})", datos.get("es_avance", False))
+    subtitulo_slide(slide, f"Proyección (Forecast {datos['nombre_mes_corte']}—Diciembre)")
 
     tarjetas = [
         ("Equipo Móvil", COLOR_EM, _fmt_uf(datos['em_total']) + " UF",
@@ -545,7 +443,7 @@ def slide_forecast_total(prs, datos):
           f"Honorarios en Stock: {_fmt_uf(datos['pipeline_bruto_total'])} UF no facturados en pipeline total (bruto, sin probabilidad)",
           12.0, COLOR_MUTED)
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
@@ -553,9 +451,8 @@ def slide_forecast_total(prs, datos):
 # SLIDE — ANÁLISIS DE DESVIACIÓN
 # ---------------------------------------------------------
 def slide_desviacion(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(slide, f"3. Análisis de Desviación (Gap) vs. Meta — Forecast {datos['label']}",
-                      "Evaluación de Brecha Estratégica y Acciones Mitigadoras", COLOR_IE)
+    slide = nueva_slide(prs, f"3. Análisis de Desviación (Gap) vs. Meta — Forecast {datos['label']}", datos.get("es_avance", False))
+    subtitulo_slide(slide, "Evaluación de Brecha Estratégica y Acciones Mitigadoras")
 
     usar_con_admin = datos['total_admin'] > 0
     cierre_ref = datos['cierre_con_admin'] if usar_con_admin else datos['cierre_sin_admin']
@@ -591,12 +488,12 @@ def slide_desviacion(prs, datos):
     bullets_ie = [f"• {b}" for b in datos.get('bullets_accion_ie', [])]
     texto(slide, Emu(5943600), Emu(3169920), Emu(5242560), Emu(2438400), bullets_ie, 12.0, COLOR_TEXTO, margenes=False)
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
 # ---------------------------------------------------------
-# Helpers de estilo para gráficos nativos (tema oscuro)
+# Helpers de estilo para gráficos nativos
 # ---------------------------------------------------------
 def _estilizar_chart(chart, mostrar_leyenda=True):
     chart.has_title = False
@@ -642,9 +539,8 @@ def _colorear_series(chart, colores):
 # SLIDE — EVOLUCIÓN N+M (gráfico de curvas acumuladas)
 # ---------------------------------------------------------
 def slide_evolucion(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(slide, f"Evolución Forecast {datos['label']} año {datos['anio']}",
-                      "Real acumulado + proyección hasta diciembre", COLOR_IE)
+    slide = nueva_slide(prs, f"Evolución Forecast {datos['label']} año {datos['anio']}", datos.get("es_avance", False))
+    subtitulo_slide(slide, "Real acumulado + proyección hasta diciembre")
 
     chart_data = CategoryChartData()
     chart_data.categories = datos['grafico_meses']
@@ -661,7 +557,7 @@ def slide_evolucion(prs, datos):
     colores = [COLOR_TEXTO, COLOR_EM, COLOR_CTM, COLOR_MUTED2]
     _colorear_series(chart, colores)
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
@@ -757,8 +653,8 @@ _COLUMNAS_TOP10 = [
 
 
 def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(slide, titulo, subtitulo, color_accent)
+    slide = nueva_slide(prs, titulo, datos.get("es_avance", False))
+    subtitulo_slide(slide, subtitulo, color_hex=color_accent)
 
     casos = datos.get(clave, [])
     if not casos:
@@ -776,7 +672,7 @@ def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
         _tabla_casos(slide, MARGEN_X, Emu(1341120), CONTENIDO_W, Emu(4800000),
                      _COLUMNAS_TOP10, filas, color_accent)
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
@@ -784,9 +680,9 @@ def slide_top_probabilidad(prs, datos, clave, titulo, subtitulo, color_accent):
 # SLIDE — FACTURACIÓN MENSUAL POR DIVISIÓN (barras)
 # ---------------------------------------------------------
 def slide_facturacion_mensual(prs, datos):
-    slide = nueva_slide(prs, datos.get("es_avance", False))
-    encabezado_slide(slide, f"Facturación Mensual por División — {datos['nombre_mes_inicio']} a {datos['nombre_mes_corte']} {datos['anio']}",
-                      "Real, por mes cerrado", COLOR_IE)
+    slide = nueva_slide(prs, f"Facturación Mensual por División — {datos['nombre_mes_inicio']} a {datos['nombre_mes_corte']} {datos['anio']}",
+                         datos.get("es_avance", False))
+    subtitulo_slide(slide, "Real, por mes cerrado")
 
     chart_data = CategoryChartData()
     chart_data.categories = datos['meses_mensual']
@@ -799,36 +695,28 @@ def slide_facturacion_mensual(prs, datos):
     _estilizar_chart(chart)
     _colorear_series(chart, [COLOR_EM, COLOR_IE])
 
-    pie_de_pagina(slide, datos['fuente_texto'])
+    fuente_slide(slide, datos['fuente_texto'])
     return slide
 
 
 # ---------------------------------------------------------
-# SLIDE — CIERRE (clonada del formato corporativo JPV)
+# SLIDE — CIERRE (layout "9 Cierre" de la plantilla)
 # ---------------------------------------------------------
 def slide_cierre(prs, datos):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    plantilla = _cargar_plantilla_jpv()
-    if plantilla is not None and len(plantilla.slides) > 1:
-        clonar_shapes_de_plantilla(slide, plantilla.slides[1])
-    else:
-        # Respaldo si falta el asset de la plantilla (assets/plantilla_jpv.pptx).
-        fondo = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
-        fondo.fill.solid()
-        fondo.fill.fore_color.rgb = _rgb(COLOR_BAR)
-        _sin_borde(fondo)
-        fondo.shadow.inherit = False
-        texto(slide, MARGEN_X, Emu(3000000), CONTENIDO_W, Emu(800000),
-              "Gracias", 32, "FFFFFF", bold=True, align=PP_ALIGN.CENTER, fuente=FUENTE_TITULO)
+    layout = prs.slide_layouts[LAYOUT_CIERRE]
+    slide = prs.slides.add_slide(layout)
+    _set_placeholder(slide, 104, "Gracias")
+    _set_placeholder(slide, 105, "Línea Base Forecast — Ingeniería y Equipo Móvil")
+    _set_placeholder(slide, 106, "JPV Asociados")
+    _set_placeholder(slide, 107, datos["fecha_emision"])
     return slide
 
 
 def generar_pptx_forecast(datos):
     """Genera la presentación completa y devuelve los bytes del archivo .pptx."""
     import io as _io
-    prs = Presentation()
-    prs.slide_width = SLIDE_W
-    prs.slide_height = SLIDE_H
+    prs = _cargar_plantilla()
+    _eliminar_slide(prs, 0)  # quita la slide de ejemplo incluida en la plantilla
 
     slide_portada(prs, datos)
     slide_agenda(prs, datos)
